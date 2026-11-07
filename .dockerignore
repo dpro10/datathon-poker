@@ -1,0 +1,20 @@
+# Only agent.py, sdbot/ (with its data), game.py and evaluator.py are needed to play.
+.git
+.github
+**/__pycache__
+**/*.pyc
+.venv
+dev/
+arena/
+ladder/
+ladder_data/
+bots/
+tests/
+official/
+pokerlib/
+runs/
+baseline-bots/
+tools/
+docker/
+*.md
+*.json
