@@ -246,6 +246,72 @@ def test_bot_served_over_http():
         server.wait()
 
 
+# ---------- sandbox and ladder ----------
+def test_sandbox_blocks_escapes():
+    from arena import sandbox
+
+    if not sandbox.available():
+        return
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        spy = _temp_bot(d, "spy", f"""
+            import os, socket, subprocess
+            def blocked(fn):
+                try:
+                    fn()
+                    return False
+                except Exception:
+                    return True
+            class Bot:
+                def act(self, s):
+                    checks = [
+                        blocked(lambda: open({str(Path.home() / '.zshrc')!r}).read()),
+                        blocked(lambda: os.listdir({str(Path.home())!r})),
+                        blocked(lambda: open({str(ROOT / 'README.md')!r}).read()),
+                        blocked(lambda: open({str(ROOT / 'bots' / 'equity_bot.py')!r}).read()),
+                        blocked(lambda: open('/private/tmp/sandbox_escape_test', 'w').write('x')),
+                        blocked(lambda: socket.create_connection(('1.1.1.1', 80), timeout=2)),
+                        blocked(lambda: subprocess.run(['/bin/ls'], capture_output=True)),
+                        not any(k.endswith(('KEY', 'TOKEN', 'SECRET')) for k in os.environ),
+                    ]
+                    if not all(checks):
+                        raise RuntimeError(f"escape possible: {{checks}}")
+                    open('scratch.txt', 'w').write('ok')
+                    return {{"action": "check" if "check" in s["legal"] else "call"}}
+        """)
+        spy.sandbox = True
+        r = run_match(spy, resolve_bot("calling_station"), Rules(), hands=4, seed=1)
+        assert r["health"]["spy"]["errors"] == 0 and not r["health"]["spy"]["crashed"], r["health"]["spy"]
+
+
+def test_ladder_end_to_end():
+    from ladder.core import Ladder, SubmitError
+
+    with tempfile.TemporaryDirectory() as d:
+        lad = Ladder(data_dir=Path(d), invite="code-1", hands=40, workers=2)
+        lad.ensure_house_bots()
+        good = (ROOT / "bots" / "equity_bot.py").read_text()
+        for bad in [("x", "me", good, "wrong"), ("bad name!", "me", good, "code-1"),
+                    ("crash", "me", "class Bot:\n    def act(self, s):\n        return 1/0\n", "code-1")]:
+            try:
+                lad.submit(*bad)
+                raise AssertionError(f"accepted {bad[0]}")
+            except SubmitError:
+                pass
+        bot_id, key = lad.submit("mine", "me", good, "code-1")
+        lad.start()
+        deadline = time.time() + 30
+        while time.time() < deadline and lad.state()["total_matches"] < 8:
+            time.sleep(0.5)
+        lad.shutdown()
+        state = lad.state()
+        assert state["total_matches"] >= 8
+        assert sum(b["matches"] for b in state["bots"]) == 2 * state["total_matches"]
+        assert lad.bot_detail(bot_id)["bot"]["name"] == "mine"
+        assert lad.owner_log(bot_id, "wrong") is None and lad.owner_log(bot_id, key) is not None
+        assert lad.retire(bot_id, key) and not lad.bot_detail(bot_id)["bot"]["active"]
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

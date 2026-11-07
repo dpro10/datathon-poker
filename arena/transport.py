@@ -19,19 +19,30 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class BotProcess:
-    """Runs a bot file in its own Python process with a fresh empty working folder."""
+    """Runs a bot file in its own Python process with a fresh empty working folder.
 
-    def __init__(self, path: str, log_path: Path | None):
+    sandboxed=True (for code we did not write): macOS sandbox, no network, no files outside its
+    folder, no environment variables from this machine, CPU and file-size limits.
+    """
+
+    def __init__(self, path: str, log_path: Path | None, sandboxed: bool = False):
         self.fatal: str | None = None
         self.dead = False
         self.seq = 0
-        self.workdir = tempfile.mkdtemp(prefix="pokerbot_")
-        env = dict(os.environ)
-        env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        self.workdir = os.path.realpath(tempfile.mkdtemp(prefix="pokerbot_"))
+        if sandboxed:
+            from . import sandbox
+
+            cmd = sandbox.command(path, self.workdir) + ["--limits"]
+            env = {"PATH": "/usr/bin:/bin", "HOME": self.workdir, "TMPDIR": self.workdir,
+                   "LANG": "en_US.UTF-8", "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
+        else:
+            cmd = [sys.executable, "-m", "arena.runner", path]
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         self.log = open(log_path, "a", encoding="utf-8") if log_path else subprocess.DEVNULL
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "arena.runner", path],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
             cwd=self.workdir, env=env, text=True, encoding="utf-8", bufsize=1,
         )
         self.lines: queue.Queue = queue.Queue()
@@ -161,7 +172,7 @@ def fetch_http_name(url: str) -> str | None:
         return None
 
 
-def open_bot(kind: str, target: str, log_path: Path | None):
+def open_bot(kind: str, target: str, log_path: Path | None, sandboxed: bool = False):
     if kind == "http":
         return BotHTTP(target)
-    return BotProcess(target, log_path)
+    return BotProcess(target, log_path, sandboxed)

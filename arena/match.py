@@ -42,6 +42,7 @@ class BotSpec:
     kind: str    # "file" or "http"
     target: str  # file path or URL
     name: str
+    sandbox: bool = False  # run inside the macOS sandbox (code we did not write)
 
 
 def resolve_bot(spec: str) -> BotSpec:
@@ -65,7 +66,7 @@ def unique_names(specs: list[BotSpec]) -> list[BotSpec]:
     out = []
     for s in specs:
         seen[s.name] = seen.get(s.name, 0) + 1
-        out.append(s if seen[s.name] == 1 else BotSpec(s.kind, s.target, f"{s.name}#{seen[s.name]}"))
+        out.append(s if seen[s.name] == 1 else BotSpec(s.kind, s.target, f"{s.name}#{seen[s.name]}", s.sandbox))
     return out
 
 
@@ -125,10 +126,11 @@ def _record_problem(h: Health, status: str, bot, where: str, reply) -> None:
 
 
 def _play_half(seats: list[BotSpec], decks, rules: Rules, timeout: float, init_timeout: float,
-               out_dir: Path | None, tag: str, on_hand, save_hands: bool):
+               out_dir: Path | None, tag: str, on_hand, save_hands: bool, time_bank: float | None = None):
     ev = get_evaluator(rules)
     health = [Health(), Health()]
     in_a_row = [0, 0]
+    thinking = [0.0, 0.0]
     bots = []
     nets: list[int] = []
     hand_log = None
@@ -149,7 +151,7 @@ def _play_half(seats: list[BotSpec], decks, rules: Rules, timeout: float, init_t
     try:
         for spec in seats:
             log_path = out_dir / f"{safe_name(spec.name)}_{tag}.log" if out_dir else None
-            bots.append(open_bot(spec.kind, spec.target, log_path))
+            bots.append(open_bot(spec.kind, spec.target, log_path, spec.sandbox))
         if save_hands and out_dir:
             hand_log = open(out_dir / f"hands_{tag}.jsonl", "w", encoding="utf-8")
         info = {"rules": rules.to_dict(), "hands": len(decks), "session": tag, "time_limit": timeout}
@@ -160,9 +162,14 @@ def _play_half(seats: list[BotSpec], decks, rules: Rules, timeout: float, init_t
             while not hand.finished:
                 s = hand.to_act
                 state = hand.view(s)
+                if time_bank is not None and thinking[s] > time_bank and not bots[s].dead:
+                    bots[s].kill(f"used up its {time_bank:g}s of thinking time for this half")
+                    _record_problem(health[s], "crashed", bots[s], f"hand {i}", None)
                 t0 = time.perf_counter()
                 reply, status = ask(s, {"type": "act", "state": state}, timeout, f"hand {i} {state['street']}")
-                health[s].times.append(time.perf_counter() - t0)
+                elapsed = time.perf_counter() - t0
+                thinking[s] += elapsed
+                health[s].times.append(elapsed)
                 if status == "ok":
                     try:
                         hand.act(s, reply.get("action"), reply.get("amount"))
@@ -191,7 +198,7 @@ def _play_half(seats: list[BotSpec], decks, rules: Rules, timeout: float, init_t
 
 def run_match(a: BotSpec, b: BotSpec, rules: Rules, hands: int = 2000, seed: int | None = None,
               timeout: float = 2.0, init_timeout: float = 30.0, out_dir: Path | None = None,
-              save_hands: bool = False, progress: bool = False) -> dict:
+              save_hands: bool = False, progress: bool = False, time_bank: float | None = None) -> dict:
     """Duplicate match. Returns a summary dict from a's point of view."""
     a, b = unique_names([a, b])
     deals = max(1, hands // 2)
@@ -209,8 +216,10 @@ def run_match(a: BotSpec, b: BotSpec, rules: Rules, hands: int = 2000, seed: int
 
     started = time.time()
     with ThreadPoolExecutor(max_workers=2) as pool:
-        f1 = pool.submit(_play_half, [a, b], decks, rules, timeout, init_timeout, out_dir, "half1", on_hand, save_hands)
-        f2 = pool.submit(_play_half, [b, a], decks, rules, timeout, init_timeout, out_dir, "half2", on_hand, save_hands)
+        f1 = pool.submit(_play_half, [a, b], decks, rules, timeout, init_timeout, out_dir, "half1", on_hand,
+                         save_hands, time_bank)
+        f2 = pool.submit(_play_half, [b, a], decks, rules, timeout, init_timeout, out_dir, "half2", on_hand,
+                         save_hands, time_bank)
         while progress and not (f1.done() and f2.done()):
             sys.stderr.write(f"\r  {a.name} vs {b.name}: {done[0]:,}/{2 * deals:,} hands")
             sys.stderr.flush()
@@ -378,6 +387,8 @@ def run_check(spec: BotSpec, rules: Rules, hands: int = 200, timeout: float = 2.
     problems = 0
     slowest = 0.0
     for opp_name in PRACTICE_BOTS:
+        if not (BOTS_DIR / f"{opp_name}.py").exists():
+            continue
         opp = resolve_bot(opp_name)
         if opp.kind == spec.kind and Path(opp.target) == Path(spec.target):
             continue

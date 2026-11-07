@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poker Bot Ladder</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23500000'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='white'%3E%E2%99%A0%3C/text%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f7f6f4; --surface: #ffffff; --text: #1d1b1a; --muted: #6f6a66; --line: #e6e2de;
+  --accent: #500000; --accent-ink: #ffffff; --accent-soft: #f5eaea;
+  --pos: #1f7a3e; --neg: #b42318; --warn: #9a5800; --warn-soft: #fff4e0; --ok-soft: #eaf6ee; --err-soft: #fdecea;
+  --radius: 12px;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111010; --surface: #1a1918; --text: #eceae8; --muted: #a29d98; --line: #2e2b29;
+    --accent: #d99393; --accent-ink: #1c0c0c; --accent-soft: #2b1c1c;
+    --pos: #63c785; --neg: #f2857a; --warn: #f0b45a; --warn-soft: #2c2214; --ok-soft: #15281c; --err-soft: #2e1714;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
+header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-top: 28px; padding-bottom: 20px; }
+.brand { display: flex; align-items: center; gap: 14px; }
+.logo { width: 44px; height: 44px; border-radius: 11px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-size: 26px; flex: none; }
+h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+h3 { font-size: 13px; margin: 18px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.sub { color: var(--muted); font-size: 13px; }
+.stats { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; padding-bottom: 48px; }
+@media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 20px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.card-head h2 { margin: 0; }
+.table-wrap { overflow-x: auto; margin: 0 -18px; padding: 0 18px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); padding: 8px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr:last-child td { border-bottom: 0; }
+#board tbody tr { cursor: pointer; }
+#board tbody tr:hover { background: var(--accent-soft); }
+#board tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+tr.sel { background: var(--accent-soft); }
+tr.retired { opacity: 0.55; }
+.num { text-align: right; white-space: nowrap; }
+.strong { font-weight: 650; }
+.name { font-weight: 600; }
+.tag { display: inline-block; margin-left: 6px; font-size: 11px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--line); color: var(--muted); vertical-align: 1px; }
+.tag.mine { border-color: var(--accent); color: var(--accent); }
+.pos { color: var(--pos); } .neg { color: var(--neg); }
+.ok { color: var(--muted); font-size: 13px; }
+.warn { color: var(--warn); font-size: 13px; font-weight: 600; }
+.toggle { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.feed { list-style: none; margin: 0; padding: 0; }
+.feed li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.feed li:last-child { border-bottom: 0; }
+.live { display: flex; align-items: center; gap: 8px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pos); flex: none; animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+form label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+input[type=text], input:not([type]), input[type=file] { display: block; width: 100%; margin-top: 4px; font: inherit; font-weight: 400; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button { font: inherit; font-weight: 600; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); border-radius: 8px; padding: 9px 14px; cursor: pointer; }
+button:disabled { opacity: 0.6; cursor: wait; }
+button.ghost { background: transparent; color: var(--text); border-color: var(--line); font-weight: 500; padding: 6px 12px; }
+button.danger { background: transparent; color: var(--neg); border-color: var(--neg); font-weight: 500; padding: 6px 12px; }
+form button[type=submit] { width: 100%; }
+.result { margin-top: 12px; border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+.result.ok { background: var(--ok-soft); } .result.error { background: var(--err-soft); } .result.busy { background: var(--bg); color: var(--muted); }
+pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 300px; overflow: auto; margin: 8px 0 0; }
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+@media (max-width: 560px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.kpi { background: var(--bg); border-radius: 10px; padding: 10px 12px; }
+.kpi b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.kpi span { font-size: 12px; color: var(--muted); }
+.detail-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.detail-head h2 { font-size: 20px; margin: 0; }
+.note { background: var(--warn-soft); color: var(--text); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.how ol, .how ul { padding-left: 18px; margin: 0; }
+.how li { margin-bottom: 6px; }
+a { color: var(--accent); }
+.offline { background: var(--warn-soft); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+#rules { white-space: pre-line; }
+</style>
+</head>
+<body>
+<header class="wrap">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">&#9824;</div>
+    <div>
+      <h1>Poker Bot Ladder</h1>
+      <div class="sub">Heads-up short-deck 5-card Pot-Limit Omaha. Enter a bot and it plays every other bot, nonstop.</div>
+    </div>
+  </div>
+  <div class="stats" id="stats"></div>
+</header>
+<div class="wrap"><p class="offline" id="offline" hidden>Can't reach the ladder right now. Retrying.</p></div>
+<main class="wrap grid">
+  <section>
+    <div class="card">
+      <div class="card-head">
+        <h2>Leaderboard</h2>
+        <label class="toggle"><input type="checkbox" id="show-retired"> Show retired</label>
+      </div>
+      <div class="table-wrap">
+        <table id="board">
+          <thead><tr>
+            <th class="num">#</th><th>Bot</th><th class="num">Rating</th><th class="num" title="Wins-losses, then draws if any">Record</th>
+            <th class="num" title="Big blinds won per 100 hands, across all matches">bb/100</th>
+            <th class="num">Matches</th><th>Health</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" id="detail" hidden></div>
+    <div class="card">
+      <h2>Matches</h2>
+      <ul class="feed" id="matches"></ul>
+    </div>
+  </section>
+  <aside>
+    <div class="card">
+      <h2>Enter a bot</h2>
+      <form id="enter" autocomplete="off">
+        <label>Bot name <input name="botname" maxlength="24" placeholder="diego-v3" spellcheck="false"></label>
+        <label>Your name <input name="author" maxlength="30" required></label>
+        <label>Invite code <input name="invite" required spellcheck="false"></label>
+        <label>Bot file (.py) <input name="file" type="file" accept=".py" required></label>
+        <button type="submit">Test and enter</button>
+        <div class="result" id="enter-result" hidden></div>
+      </form>
+    </div>
+    <div class="card how">
+      <h2>How it works</h2>
+      <ol>
+        <li>Download the <a href="/starter.zip">starter kit</a> (or just the <a href="/my_bot.py">bot template</a>) and write your bot.</li>
+        <li>Test it locally: <code>python3 -m arena check my_bot</code></li>
+        <li>Upload it here. It plays a 20-hand test first, then joins the ladder.</li>
+        <li>Upload new versions under new names (diego-v2, diego-v3) and compare them.</li>
+      </ol>
+      <h3>Fair matches</h3>
+      <ul>
+        <li>Every deal is played twice with the seats swapped, so both bots get the same cards.</li>
+        <li>Rating is Elo from match wins. bb/100 is big blinds won per 100 hands.</li>
+      </ul>
+      <h3>Rules</h3>
+      <p class="sub" id="rules"></p>
+      <h3>Limits</h3>
+      <ul class="sub" id="limits"></ul>
+    </div>
+  </aside>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

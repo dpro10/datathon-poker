@@ -1,9 +1,24 @@
 """Child process that hosts one bot and talks JSON lines on stdin/stdout. The arena starts it."""
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root, also under -I
+
+
+def _apply_limits() -> None:
+    import resource
+
+    for limit, value in ((resource.RLIMIT_CPU, 600), (resource.RLIMIT_FSIZE, 50 * 2 ** 20)):
+        try:
+            resource.setrlimit(limit, (value, value))
+        except (ValueError, OSError):
+            pass
 
 
 def main() -> int:
+    if "--limits" in sys.argv[2:]:
+        _apply_limits()
     protocol_out = sys.stdout
     sys.stdout = sys.stderr  # the bot's print() goes to its log file, not the protocol
     from arena.host import BotHost

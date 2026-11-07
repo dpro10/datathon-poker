@@ -37,6 +37,28 @@ and you run `python3 -m arena match diego http://<their-ip>:9001`. For full symm
 you serve and either one runs `python3 -m arena match http://<ip-a>:9001 http://<ip-b>:9002`.
 If campus Wi-Fi blocks laptop-to-laptop connections, put both laptops on one phone hotspot.
 
+## Ladder website
+
+A site where people upload bots that play each other nonstop, with a live leaderboard.
+
+```sh
+python3 -m ladder serve --tunnel                      # prints the public link and the invite code
+python3 -m ladder submit bots/diego.py --name diego-v2 # upload from the terminal
+python3 -m ladder list                                # leaderboard in the terminal
+python3 -m ladder retire <name>                       # host: take a bot off (restore puts it back)
+python3 -m ladder stop
+```
+
+- Anyone with the link can watch; uploading needs the invite code.
+- Every upload plays a 20-hand test first; broken bots are rejected with their error output.
+- Uploaded bots run in a macOS sandbox: no internet, no files outside their own folder,
+  none of your environment variables, CPU and file-size limits.
+- The house practice bots stay on the ladder as a baseline. The starter kit people can
+  download leaves out `equity_bot.py`.
+- Data (bots, results, invite code) lives in `ladder_data/`, which is not committed.
+- The public link works only while this Mac is awake and online (the server keeps it from
+  idling to sleep, but closing the lid still sleeps it). The link changes on every restart.
+
 ## Why it's fair
 
 - **Same cards:** every deal is played twice, the second time with the bots in each other's
