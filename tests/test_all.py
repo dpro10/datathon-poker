@@ -285,14 +285,18 @@ def test_sandbox_blocks_escapes():
 
 
 def test_ladder_end_to_end():
+    """Official-format ladder: baselines, uploads checked by a short official half, live matches."""
     from ladder.core import Ladder, SubmitError
 
+    good = (ROOT / "official" / "baseline-bots" / "baseline_calling_station.py").read_text()
+    crashing = good.replace("def choose_action(obs: Observation, memory: dict) -> Action:",
+                            "def choose_action(obs: Observation, memory: dict) -> Action:\n    raise ValueError('bug')")
+    assert crashing != good
     with tempfile.TemporaryDirectory() as d:
-        lad = Ladder(data_dir=Path(d), invite="code-1", hands=40, workers=2)
+        lad = Ladder(data_dir=Path(d), invite="code-1", deals=60, workers=2)
         lad.ensure_house_bots()
-        good = (ROOT / "bots" / "equity_bot.py").read_text()
         for bad in [("x", "me", good, "wrong"), ("bad name!", "me", good, "code-1"),
-                    ("crash", "me", "class Bot:\n    def act(self, s):\n        return 1/0\n", "code-1")]:
+                    ("notabot", "me", "print('hi')\n", "code-1"), ("crash", "me", crashing, "code-1")]:
             try:
                 lad.submit(*bad)
                 raise AssertionError(f"accepted {bad[0]}")
@@ -300,13 +304,14 @@ def test_ladder_end_to_end():
                 pass
         bot_id, key = lad.submit("mine", "me", good, "code-1")
         lad.start()
-        deadline = time.time() + 30
+        deadline = time.time() + 60
         while time.time() < deadline and lad.state()["total_matches"] < 8:
             time.sleep(0.5)
         lad.shutdown()
         state = lad.state()
         assert state["total_matches"] >= 8
         assert sum(b["matches"] for b in state["bots"]) == 2 * state["total_matches"]
+        assert all(b["errors"] == 0 and b["forfeits"] == 0 for b in state["bots"])
         assert lad.bot_detail(bot_id)["bot"]["name"] == "mine"
         assert lad.owner_log(bot_id, "wrong") is None and lad.owner_log(bot_id, key) is not None
         assert lad.retire(bot_id, key) and not lad.bot_detail(bot_id)["bot"]["active"]

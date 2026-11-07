@@ -1,10 +1,9 @@
-"""The ladder: stores bots, plays duplicate matches between them nonstop, keeps Elo ratings."""
+"""The ladder: stores official-format bots, plays official matches between them nonstop,
+keeps Elo ratings from the official verdicts (win 1, chop 0.5, loss 0)."""
 from __future__ import annotations
 
 import hashlib
-import io
 import json
-import math
 import random
 import re
 import secrets
@@ -14,27 +13,27 @@ import tempfile
 import threading
 import time
 import traceback
-import zipfile
 from pathlib import Path
 
 from arena import sandbox
-from arena.match import BOTS_DIR, ROOT, BotSpec, run_match, safe_name
-from pokerlib import Rules
 
+from . import official
+
+ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "ladder_data"
-HOUSE_BOTS = ("calling_station", "maniac", "random_bot", "rock", "equity_bot")
-STARTER_BOTS = ("calling_station", "maniac", "random_bot", "rock")  # equity_bot stays private
+BASELINES = ("random", "calling_station", "always_half", "always_pot")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,23}$")
-MAX_CODE_BYTES = 200_000
+MAX_CODE_BYTES = 300_000
 KEEP_MATCH_DIRS = 400
-AUTO_RETIRE_AFTER = 3  # matches in a row in which the bot crashed
+AUTO_RETIRE_AFTER = 3  # matches in a row with a forfeit
+SMOKE_DEALS = 40
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bots (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
   author TEXT NOT NULL,
-  kind TEXT NOT NULL,
+  kind TEXT NOT NULL,              -- house, local, upload
   path TEXT NOT NULL,
   owner_key_hash TEXT,
   created_at REAL NOT NULL,
@@ -43,29 +42,29 @@ CREATE TABLE IF NOT EXISTS bots (
   rating REAL NOT NULL DEFAULT 1500,
   matches INTEGER NOT NULL DEFAULT 0,
   wins INTEGER NOT NULL DEFAULT 0,
+  chops INTEGER NOT NULL DEFAULT 0,
   losses INTEGER NOT NULL DEFAULT 0,
-  draws INTEGER NOT NULL DEFAULT 0,
-  chips INTEGER NOT NULL DEFAULT 0,
-  hands INTEGER NOT NULL DEFAULT 0,
-  timeouts INTEGER NOT NULL DEFAULT 0,
+  points REAL NOT NULL DEFAULT 0,
+  bb_sum REAL NOT NULL DEFAULT 0,  -- sum over matches of bb won per deal
   errors INTEGER NOT NULL DEFAULT 0,
-  illegal INTEGER NOT NULL DEFAULT 0,
-  crashes INTEGER NOT NULL DEFAULT 0,
-  crash_streak INTEGER NOT NULL DEFAULT 0,
+  forfeits INTEGER NOT NULL DEFAULT 0,
+  bank_outs INTEGER NOT NULL DEFAULT 0,
+  think_max REAL NOT NULL DEFAULT 0,
+  forfeit_streak INTEGER NOT NULL DEFAULT 0,
   last_problem TEXT
 );
 CREATE TABLE IF NOT EXISTS matches (
   id INTEGER PRIMARY KEY,
   a INTEGER NOT NULL REFERENCES bots(id),
   b INTEGER NOT NULL REFERENCES bots(id),
-  net_a INTEGER NOT NULL,
-  hands INTEGER NOT NULL,
-  t REAL,
-  seed INTEGER,
-  rating_a REAL,
-  rating_b REAL,
-  delta_a REAL,
-  health TEXT,
+  verdict TEXT NOT NULL,
+  points_a REAL NOT NULL,
+  points_b REAL NOT NULL,
+  mean_bb REAL NOT NULL,           -- a's bb per deal
+  ci_low REAL, ci_high REAL,
+  deals INTEGER NOT NULL,
+  delta_a REAL, delta_b REAL,
+  stats TEXT,
   seconds REAL,
   dir TEXT,
   created_at REAL NOT NULL
@@ -79,13 +78,13 @@ MATCH_SELECT = ("SELECT m.*, a.name AS a_name, b.name AS b_name FROM matches m "
 
 H2H_SQL = """
 SELECT o.id AS opp_id, o.name AS opp_name, o.rating AS opp_rating, COUNT(*) AS n,
-  SUM(CASE WHEN (m.a = :id AND m.net_a > 0) OR (m.b = :id AND m.net_a < 0) THEN 1 ELSE 0 END) AS wins,
-  SUM(CASE WHEN (m.a = :id AND m.net_a < 0) OR (m.b = :id AND m.net_a > 0) THEN 1 ELSE 0 END) AS losses,
-  SUM(CASE WHEN m.a = :id THEN m.net_a ELSE -m.net_a END) AS chips,
-  SUM(m.hands) AS hands
+  SUM(CASE WHEN m.a = :id THEN m.points_a ELSE m.points_b END) AS points,
+  SUM(CASE WHEN (m.a = :id AND m.points_a = 1) OR (m.b = :id AND m.points_b = 1) THEN 1 ELSE 0 END) AS wins,
+  SUM(CASE WHEN m.points_a = 0.5 THEN 1 ELSE 0 END) AS chops,
+  SUM(CASE WHEN m.a = :id THEN m.mean_bb ELSE -m.mean_bb END) AS bb_sum
 FROM matches m JOIN bots o ON o.id = CASE WHEN m.a = :id THEN m.b ELSE m.a END
 WHERE m.a = :id OR m.b = :id
-GROUP BY o.id ORDER BY chips DESC
+GROUP BY o.id ORDER BY points * 1.0 / COUNT(*) DESC, bb_sum DESC
 """
 
 
@@ -95,7 +94,7 @@ def _hash(key: str) -> str:
 
 def _scrub(text: str) -> str:
     """Remove this machine's folder paths (username, temp folders) from text shown on the site."""
-    text = re.sub(r'File "[^"]*/bot\.py"', 'File "bot.py"', text)
+    text = re.sub(r'File "[^"]*/(agent|bot)\.py"', r'File "\1.py"', text)
     for root in {str(ROOT), str(ROOT.resolve())}:
         text = text.replace(root + "/", "")
     text = re.sub(r"/(?:private/)?var/folders/[^\s'\"]*/", "", text)
@@ -123,20 +122,14 @@ class SubmitError(Exception):
 
 
 class Ladder:
-    def __init__(self, data_dir: Path = DATA_DIR, invite: str = "", hands: int = 400, timeout: float = 2.0,
-                 time_bank: float = 60.0, workers: int = 2, rules: Rules | None = None):
+    def __init__(self, data_dir: Path = DATA_DIR, invite: str = "", deals: int = 1000, workers: int = 2):
         self.data = Path(data_dir)
         (self.data / "bots").mkdir(parents=True, exist_ok=True)
         (self.data / "matches").mkdir(parents=True, exist_ok=True)
-        self.invite = invite
-        self.hands = hands
-        self.timeout = timeout
-        self.time_bank = time_bank
-        self.workers = workers
-        self.rules = rules or Rules()
+        self.invite, self.deals, self.workers = invite, deals, workers
         self.sandboxed = sandbox.available()
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(self.data / "ladder.db", check_same_thread=False)
+        self.db = sqlite3.connect(self.data / "ladder_v2.db", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
         self.running: dict = {}
@@ -147,73 +140,93 @@ class Ladder:
             self.h2h[k] = self.h2h.get(k, 0) + r["n"]
         self.smoke_slots = threading.Semaphore(2)
         self.stop = threading.Event()
+        self.threads: list = []
         self.recorded = 0
 
     # ----- bots -----
     def ensure_house_bots(self) -> None:
         with self.lock:
-            for name in HOUSE_BOTS:
-                path = BOTS_DIR / f"{name}.py"
-                if not path.exists():
-                    continue
+            for name in BASELINES:
+                path = official.OFFICIAL / "baseline-bots" / f"baseline_{name}.py"
                 row = self.db.execute("SELECT id FROM bots WHERE name = ?", (name,)).fetchone()
                 if row is None:
                     self.db.execute("INSERT INTO bots (name, author, kind, path, created_at) "
-                                    "VALUES (?, 'house', 'house', ?, ?)", (name, str(path), time.time()))
+                                    "VALUES (?, 'organizers', 'house', ?, ?)", (name, str(path), time.time()))
                 else:
-                    self.db.execute("UPDATE bots SET path = ? WHERE id = ? AND kind = 'house'", (str(path), row["id"]))
+                    self.db.execute("UPDATE bots SET path = ? WHERE id = ?", (str(path), row["id"]))
             self.db.commit()
 
-    def submit(self, name: str, author: str, code: str, invite: str) -> tuple[int, str]:
-        name, author = name.strip(), " ".join(author.split())
-        if self.invite and not secrets.compare_digest(invite.strip().encode(), self.invite.encode()):
-            raise SubmitError("Wrong invite code.")
+    def add_local(self, path: str, name: str, author: str) -> int:
+        """Host only: enter a bot from a folder on this machine (it may import its own modules)."""
+        p = Path(path).resolve()
+        if not p.is_file():
+            raise SubmitError(f"No such file: {path}")
+        self._check_name(name)
+        self._smoke(p, name)
+        with self.lock:
+            cur = self.db.execute("INSERT INTO bots (name, author, kind, path, created_at) VALUES (?, ?, 'local', ?, ?)",
+                                  (name, author, str(p), time.time()))
+            self.db.commit()
+            return cur.lastrowid
+
+    def _check_name(self, name: str) -> None:
         if not NAME_RE.match(name):
             raise SubmitError("Bot name: up to 24 letters, digits, dots, dashes or underscores (no spaces).")
-        if not 1 <= len(author) <= 30:
-            raise SubmitError("Add your name (up to 30 characters).")
-        if not code.strip():
-            raise SubmitError("The file is empty.")
-        if len(code.encode()) > MAX_CODE_BYTES:
-            raise SubmitError("The file is over 200 KB.")
-        try:
-            compile(code, f"{name}.py", "exec")
-        except (SyntaxError, ValueError) as e:
-            line = getattr(e, "lineno", None)
-            raise SubmitError(f"Python syntax error{f' on line {line}' if line else ''}: {getattr(e, 'msg', e)}")
-        if not re.search(r"^class\s+Bot\b", code, re.M):
-            raise SubmitError("The file needs a class named Bot. Start from the template.")
         with self.lock:
             if self.db.execute("SELECT 1 FROM bots WHERE name = ?", (name,)).fetchone():
                 raise SubmitError(f"The name {name} is taken. Try {name}-2.")
 
-        staging = Path(tempfile.mkdtemp(prefix="upload_", dir=self.data / "bots"))
-        path = staging / "bot.py"
-        path.write_text(code, encoding="utf-8")
+    def _smoke(self, path: Path, name: str) -> None:
+        """A short official half against calling_station. Any error or forfeit rejects the bot."""
+        station = official.OFFICIAL / "baseline-bots" / "baseline_calling_station.py"
         test_dir = Path(tempfile.mkdtemp(prefix="smoke_"))
         try:
-            spec = BotSpec("file", str(path), name, self.sandboxed)
-            station = BotSpec("file", str(BOTS_DIR / "calling_station.py"), "calling_station", self.sandboxed)
             with self.smoke_slots:
-                r = run_match(spec, station, self.rules, hands=20, seed=1, timeout=self.timeout,
-                              init_timeout=20.0, out_dir=test_dir, time_bank=self.time_bank)
-            h = r["health"][r["a"]]
-            if h["crashed"] or h["errors"] or h["illegal"] or h["timeouts"]:
-                log = _tail(sorted(test_dir.glob(f"{safe_name(name)}_*.log")), 40)
-                details = _scrub("\n".join(h["problems"]))
+                half = official.play_half((str(path), name), (str(station), "calling_station"),
+                                          official.je.new_match_seed(), 1, SMOKE_DEALS, test_dir, self.sandboxed)
+            s = half.stats_agent1
+            if s.errors or s.forfeited:
+                details = _scrub("\n\n".join(s.error_messages[:3]))
+                log = _tail(sorted(test_dir.glob(f"{name}_*.log")), 30)
                 if log:
                     details += "\n\nWhat your bot printed:\n" + log
-                raise SubmitError("Your bot failed a 20-hand test against calling_station.", details)
+                raise SubmitError(f"Your bot made {s.errors} error(s) in a {SMOKE_DEALS}-hand test against "
+                                  f"calling_station{' and forfeited' if s.forfeited else ''}.", details)
         except SubmitError:
-            shutil.rmtree(staging, ignore_errors=True)
             raise
         except Exception as e:
-            shutil.rmtree(staging, ignore_errors=True)
             traceback.print_exc()
             raise SubmitError(f"Testing failed: {type(e).__name__}")
         finally:
             shutil.rmtree(test_dir, ignore_errors=True)
 
+    def submit(self, name: str, author: str, code: str, invite: str) -> tuple[int, str]:
+        name, author = name.strip(), " ".join(author.split())
+        if self.invite and not secrets.compare_digest(invite.strip().encode(), self.invite.encode()):
+            raise SubmitError("Wrong invite code.")
+        self._check_name(name)
+        if not 1 <= len(author) <= 30:
+            raise SubmitError("Add your name (up to 30 characters).")
+        if not code.strip():
+            raise SubmitError("The file is empty.")
+        if len(code.encode()) > MAX_CODE_BYTES:
+            raise SubmitError("The file is over 300 KB.")
+        try:
+            compile(code, "agent.py", "exec")
+        except (SyntaxError, ValueError) as e:
+            line = getattr(e, "lineno", None)
+            raise SubmitError(f"Python syntax error{f' on line {line}' if line else ''}: {getattr(e, 'msg', e)}")
+        if not re.search(r"^def\s+choose_action\b", code, re.M):
+            raise SubmitError("This doesn't look like the official agent.py (no choose_action function). "
+                              "Start from github.com/tamu-datathon-org/heads-up-bundle.")
+        staging = Path(tempfile.mkdtemp(prefix="upload_", dir=self.data / "bots"))
+        path = staging / "agent.py"
+        path.write_text(code, encoding="utf-8")
+        try:
+            self._smoke(path, name)
+        except SubmitError:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         key = secrets.token_urlsafe(18)
         with self.lock:
             try:
@@ -225,7 +238,7 @@ class Ladder:
             bot_id = cur.lastrowid
             final = self.data / "bots" / str(bot_id)
             staging.rename(final)
-            self.db.execute("UPDATE bots SET path = ? WHERE id = ?", (str(final / "bot.py"), bot_id))
+            self.db.execute("UPDATE bots SET path = ? WHERE id = ?", (str(final / "agent.py"), bot_id))
             self.db.commit()
         return bot_id, key
 
@@ -244,7 +257,7 @@ class Ladder:
 
     def set_active(self, name: str, active: bool) -> bool:
         with self.lock:
-            cur = self.db.execute("UPDATE bots SET active = ?, crash_streak = 0, note = ? WHERE name = ?",
+            cur = self.db.execute("UPDATE bots SET active = ?, forfeit_streak = 0, note = ? WHERE name = ?",
                                   (int(active), None if active else "retired by the host", name))
             self.db.commit()
             return cur.rowcount > 0
@@ -254,32 +267,40 @@ class Ladder:
             row = self.db.execute("SELECT * FROM bots WHERE id = ?", (bot_id,)).fetchone()
             if not self._owns(row, key):
                 return None
-            m = self.db.execute("SELECT dir FROM matches WHERE a = ? OR b = ? ORDER BY id DESC LIMIT 1",
+            m = self.db.execute("SELECT * FROM matches WHERE a = ? OR b = ? ORDER BY id DESC LIMIT 1",
                                 (bot_id, bot_id)).fetchone()
-        if not m or not m["dir"]:
+        if not m:
             return "No matches yet."
-        text = _tail(sorted(Path(m["dir"]).glob(f"{safe_name(row['name'])}_*.log")), 80)
-        return text or "Your bot printed nothing in its latest match (print() output shows up here)."
+        side = "agent1" if m["a"] == bot_id else "agent2"
+        errors = [msg for half in json.loads(m["stats"] or "{}").get(side, []) for msg in half.get("error_messages", [])]
+        text = _tail(sorted(Path(m["dir"]).glob(f"{row['name']}_half*.log")), 80) if m["dir"] else ""
+        parts = []
+        if errors:
+            parts.append("Errors the judge recorded:\n" + _scrub("\n\n".join(errors[:5])))
+        parts.append(text or "Your bot printed nothing in its latest match (print() output shows up here).")
+        return "\n\n".join(parts)
 
     # ----- views -----
-    def _public(self, r) -> dict:
-        hands = r["hands"]
+    @staticmethod
+    def _public(r) -> dict:
+        n = r["matches"]
         return {
             "id": r["id"], "name": r["name"], "author": r["author"], "house": r["kind"] == "house",
-            "active": bool(r["active"]), "note": r["note"], "rating": round(r["rating"]),
-            "matches": r["matches"], "wins": r["wins"], "losses": r["losses"], "draws": r["draws"],
-            "chips": r["chips"], "hands": hands,
-            "bb100": round(r["chips"] / hands / self.rules.big_blind * 100, 1) if hands else None,
-            "problems": r["timeouts"] + r["errors"] + r["illegal"] + r["crashes"],
-            "last_problem": r["last_problem"], "created_at": r["created_at"],
+            "kind": r["kind"], "active": bool(r["active"]), "note": r["note"], "rating": round(r["rating"]),
+            "matches": n, "wins": r["wins"], "chops": r["chops"], "losses": r["losses"],
+            "points": r["points"], "score": round(r["points"] / n, 3) if n else None,
+            "bb_deal": round(r["bb_sum"] / n, 2) if n else None,
+            "errors": r["errors"], "forfeits": r["forfeits"], "bank_outs": r["bank_outs"],
+            "think_max": round(r["think_max"], 2), "last_problem": r["last_problem"], "created_at": r["created_at"],
         }
 
     @staticmethod
     def _match(r) -> dict:
         return {
             "id": r["id"], "a": r["a"], "b": r["b"], "a_name": r["a_name"], "b_name": r["b_name"],
-            "net_a": r["net_a"], "hands": r["hands"], "t": r["t"],
-            "delta_a": round(r["delta_a"] or 0, 1), "seconds": r["seconds"], "created_at": r["created_at"],
+            "verdict": r["verdict"], "points_a": r["points_a"], "points_b": r["points_b"],
+            "mean_bb": round(r["mean_bb"], 2), "ci": [r["ci_low"], r["ci_high"]], "deals": r["deals"],
+            "seconds": r["seconds"], "created_at": r["created_at"],
         }
 
     def state(self) -> dict:
@@ -288,10 +309,11 @@ class Ladder:
             recent = [self._match(r) for r in self.db.execute(MATCH_SELECT + " ORDER BY m.id DESC LIMIT 30")]
             total = self.db.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
             running = [dict(v) for v in self.running.values()]
+        game = official.je
         return {
             "bots": bots, "matches": recent, "running": running, "total_matches": total,
-            "settings": {"hands": self.hands, "timeout": self.timeout, "time_bank": self.time_bank,
-                         "rules": self.rules.to_dict(), "rules_text": self.rules.describe(),
+            "settings": {"deals": self.deals, "time_bank": game.TIME_BANK_SECONDS, "timeout": game.ACTION_TIMEOUT_SECONDS,
+                         "error_limit": game.ERROR_LIMIT, "stack": __import__("game").STARTING_STACK,
                          "sandboxed": self.sandboxed, "invite_required": bool(self.invite)},
         }
 
@@ -305,36 +327,9 @@ class Ladder:
                 MATCH_SELECT + " WHERE m.a = ? OR m.b = ? ORDER BY m.id DESC LIMIT 20", (bot_id, bot_id))]
         for h in h2h:
             h["opp_rating"] = round(h["opp_rating"])
-            h["bb100"] = round(h["chips"] / h["hands"] / self.rules.big_blind * 100, 1) if h["hands"] else None
+            h["bb_deal"] = round(h["bb_sum"] / h["n"], 2) if h["n"] else None
+            h["losses"] = h["n"] - h["wins"] - h["chops"]
         return {"bot": self._public(row), "h2h": h2h, "recent": recent}
-
-    def starter_zip(self) -> bytes:
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            for folder in ("pokerlib", "arena"):
-                for p in sorted((ROOT / folder).glob("*.py")):
-                    z.write(p, f"poker-bot-starter/{folder}/{p.name}")
-            z.write(BOTS_DIR / "_template.py", "poker-bot-starter/bots/my_bot.py")
-            for name in STARTER_BOTS:
-                z.write(BOTS_DIR / f"{name}.py", f"poker-bot-starter/bots/{name}.py")
-            z.writestr("poker-bot-starter/requirements.txt", "numpy\n")
-            z.writestr("poker-bot-starter/README.md", self._starter_readme())
-        return buf.getvalue()
-
-    def _starter_readme(self) -> str:
-        return f"""# Poker bot starter kit
-
-1. `pip install numpy` (Python 3.10 or newer).
-2. Write your bot in `bots/my_bot.py`. The top of that file explains every field of the game state.
-3. Test it: `python3 -m arena check my_bot` (illegal moves, crashes, speed).
-4. Play it: `python3 -m arena match my_bot rock`
-5. Upload `bots/my_bot.py` on the ladder page.
-
-Game: heads-up short-deck (6 to A) 5-card Pot-Limit Omaha. {self.rules.describe()}
-Ladder matches: {self.hands} hands, every deal played from both seats, {self.timeout:g}s per decision,
-{self.time_bank:g}s of total thinking per half. Bots get Python, numpy and pokerlib; no internet,
-no files outside their own folder.
-"""
 
     # ----- matches -----
     def start(self) -> None:
@@ -344,10 +339,9 @@ no files outside their own folder.
             t.start()
 
     def shutdown(self, wait: float = 30.0) -> None:
-        """Stop scheduling and let matches in progress finish (up to `wait` seconds)."""
         self.stop.set()
         deadline = time.time() + wait
-        for t in getattr(self, "threads", []):
+        for t in self.threads:
             t.join(max(0.0, deadline - time.time()))
 
     def _pick(self):
@@ -358,12 +352,13 @@ no files outside their own folder.
                 return None
             busy = {i for pair in self.busy_pairs for i in pair}
             a = min(bots, key=lambda b: b["matches"] + (4 if b["id"] in busy else 0) + random.random())
-            options = [b for b in bots if b["id"] != a["id"]
-                       and frozenset((a["id"], b["id"])) not in self.busy_pairs]
+            options = [b for b in bots if b["id"] != a["id"] and frozenset((a["id"], b["id"])) not in self.busy_pairs]
             if not options:
                 return None
             b = min(options, key=lambda o: (self.h2h.get(frozenset((a["id"], o["id"])), 0),
                                             abs(a["rating"] - o["rating"]) / 150 + random.random()))
+            if random.random() < 0.5:
+                a, b = b, a
             key = frozenset((a["id"], b["id"]))
             self.busy_pairs.add(key)
             self.running[key] = {"a": a["name"], "b": b["name"], "started": time.time()}
@@ -378,11 +373,9 @@ no files outside their own folder.
             a, b, key = picked
             try:
                 out = self.data / "matches" / f"{int(time.time() * 1000)}_{a['id']}_{b['id']}"
-                r = run_match(BotSpec("file", a["path"], a["name"], self.sandboxed),
-                              BotSpec("file", b["path"], b["name"], self.sandboxed),
-                              self.rules, hands=self.hands, timeout=self.timeout, init_timeout=30.0,
-                              out_dir=out, time_bank=self.time_bank)
-                self._record(a["id"], b["id"], r, out)
+                m = official.play_match((a["path"], a["name"]), (b["path"], b["name"]), self.deals,
+                                        out_dir=out, sandboxed=self.sandboxed)
+                self._record(a["id"], b["id"], official.summarize(m), out)
             except Exception:
                 traceback.print_exc()
                 self.stop.wait(3.0)
@@ -391,36 +384,41 @@ no files outside their own folder.
                     self.busy_pairs.discard(key)
                     self.running.pop(key, None)
 
-    def _record(self, a_id: int, b_id: int, r: dict, out: Path) -> None:
-        net = r["net_a"]
-        score = 1.0 if net > 0 else 0.0 if net < 0 else 0.5
-        t = r["t"] if math.isfinite(r["t"]) else None
+    def _record(self, a_id: int, b_id: int, s: dict, out: Path) -> None:
+        pa, pb = s["points"]["agent1"], s["points"]["agent2"]
         with self.lock:
             A = self.db.execute("SELECT * FROM bots WHERE id = ?", (a_id,)).fetchone()
             B = self.db.execute("SELECT * FROM bots WHERE id = ?", (b_id,)).fetchone()
             expected = 1 / (1 + 10 ** ((B["rating"] - A["rating"]) / 400))
+            score = pa if pa + pb > 0 else 0.5  # both forfeited: no rating change
             da = (32 if A["matches"] < 20 else 16) * (score - expected)
             db_ = (32 if B["matches"] < 20 else 16) * ((1 - score) - (1 - expected))
-            for row, delta, chips, s in ((A, da, net, score), (B, db_, -net, 1 - score)):
-                h = r["health"][row["name"]]
-                crashed = int(bool(h["crashed"]))
-                streak = row["crash_streak"] + 1 if crashed else 0
+            if pa + pb == 0:
+                da = db_ = 0.0
+            for row, side, delta, pts, bb in ((A, "agent1", da, pa, s["mean_bb"]), (B, "agent2", db_, pb, -s["mean_bb"])):
+                halves = s["stats"][side]
+                errors = sum(h["errors"] for h in halves)
+                forfeit = any(h["forfeited"] for h in halves)
+                bank_out = any(h["timed_out"] for h in halves)
+                think = max(h.get("time_seconds", 0.0) for h in halves)
+                problem = next((m for h in halves for m in h["error_messages"]), None)
+                streak = row["forfeit_streak"] + 1 if forfeit else 0
                 active, note = row["active"], row["note"]
                 if streak >= AUTO_RETIRE_AFTER and row["kind"] != "house":
-                    active, note = 0, f"retired automatically after crashing in {streak} matches in a row"
+                    active, note = 0, f"retired automatically after forfeiting {streak} matches in a row"
                 self.db.execute(
-                    "UPDATE bots SET rating = rating + ?, matches = matches + 1, wins = wins + ?, losses = losses + ?, "
-                    "draws = draws + ?, chips = chips + ?, hands = hands + ?, timeouts = timeouts + ?, "
-                    "errors = errors + ?, illegal = illegal + ?, crashes = crashes + ?, crash_streak = ?, "
-                    "last_problem = COALESCE(?, last_problem), active = ?, note = ? WHERE id = ?",
-                    (delta, int(s == 1), int(s == 0), int(s == 0.5), chips, r["hands"], h["timeouts"],
-                     h["errors"], h["illegal"], crashed, streak, _scrub(h["problems"][0]) if h["problems"] else None,
+                    "UPDATE bots SET rating = rating + ?, matches = matches + 1, wins = wins + ?, chops = chops + ?, "
+                    "losses = losses + ?, points = points + ?, bb_sum = bb_sum + ?, errors = errors + ?, "
+                    "forfeits = forfeits + ?, bank_outs = bank_outs + ?, think_max = MAX(think_max, ?), "
+                    "forfeit_streak = ?, last_problem = COALESCE(?, last_problem), active = ?, note = ? WHERE id = ?",
+                    (delta, int(pts == 1), int(pts == 0.5), int(pts == 0), pts, bb, errors, int(forfeit),
+                     int(bank_out), think, streak, _scrub(problem.splitlines()[0]) if problem else None,
                      active, note, row["id"]))
             self.db.execute(
-                "INSERT INTO matches (a, b, net_a, hands, t, seed, rating_a, rating_b, delta_a, health, seconds, dir, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (a_id, b_id, net, r["hands"], t, r["seed"], A["rating"] + da, B["rating"] + db_, da,
-                 json.dumps(r["health"]), r["seconds"], str(out), time.time()))
+                "INSERT INTO matches (a, b, verdict, points_a, points_b, mean_bb, ci_low, ci_high, deals, delta_a, "
+                "delta_b, stats, seconds, dir, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (a_id, b_id, s["verdict"], pa, pb, s["mean_bb"], s["ci"][0], s["ci"][1], s["deals"], da, db_,
+                 json.dumps(s["stats"]), s["seconds"], str(out), time.time()))
             self.db.commit()
             k = frozenset((a_id, b_id))
             self.h2h[k] = self.h2h.get(k, 0) + 1

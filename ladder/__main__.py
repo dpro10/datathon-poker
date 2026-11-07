@@ -67,8 +67,7 @@ def cmd_serve(args) -> int:
     if not cfg.get("invite"):
         cfg["invite"] = f"{secrets.choice(WORDS)}-{secrets.choice(WORDS)}-{secrets.randbelow(9000) + 1000}"
     _save(CONFIG, cfg)
-    ladder = Ladder(invite=cfg["invite"], hands=args.hands, timeout=args.timeout,
-                    time_bank=args.time_bank, workers=args.workers)
+    ladder = Ladder(invite=cfg["invite"], deals=args.deals, workers=args.workers)
     if not ladder.sandboxed:
         print("WARNING: macOS sandbox not available; uploaded bots would run unrestricted. Refusing to start.")
         return 1
@@ -85,7 +84,8 @@ def cmd_serve(args) -> int:
     if args.tunnel:
         helpers.append(_start_tunnel(args.port))
     print(f"Ladder running at http://127.0.0.1:{args.port}   invite code: {cfg['invite']}", flush=True)
-    print(f"{args.workers} matches at a time, {args.hands} hands each, {args.timeout:g}s per decision", flush=True)
+    print(f"Official rules: {args.deals} deals per half, both halves in fresh sandboxed processes, "
+          f"{args.workers} matches at a time", flush=True)
 
     def on_term(*_):
         raise KeyboardInterrupt
@@ -154,15 +154,31 @@ def cmd_submit(args) -> int:
 
 def cmd_list(args) -> int:
     state = Ladder().state()
-    print(f"{'#':<4}{'Bot':<26}{'Author':<14}{'Rating':>7}{'W-L':>9}{'bb/100':>9}{'Matches':>9}  Status")
+    print(f"{'#':<4}{'Bot':<24}{'Author':<14}{'Rating':>7}{'W-C-L':>10}{'Score':>7}{'bb/deal':>9}  Status")
     rank = 0
     for b in state["bots"]:
         rank += b["active"]
-        bb = "-" if b["bb100"] is None else f"{b['bb100']:+.1f}"
+        bb = "-" if b["bb_deal"] is None else f"{b['bb_deal']:+.2f}"
+        score = "-" if b["score"] is None else f"{b['score']:.2f}"
         status = "active" if b["active"] else (b["note"] or "retired")
-        print(f"{rank if b['active'] else '-':<4}{b['name'][:25]:<26}{b['author'][:13]:<14}{b['rating']:>7}"
-              f"{str(b['wins']) + '-' + str(b['losses']):>9}{bb:>9}{b['matches']:>9}  {status}")
+        record = f"{b['wins']}-{b['chops']}-{b['losses']}"
+        print(f"{rank if b['active'] else '-':<4}{b['name'][:23]:<24}{b['author'][:13]:<14}{b['rating']:>7}"
+              f"{record:>10}{score:>7}{bb:>9}  {status}")
     print(f"\n{state['total_matches']} matches played")
+    return 0
+
+
+def cmd_add(args) -> int:
+    from .core import SubmitError
+
+    try:
+        bot_id = Ladder().add_local(args.file, args.name, args.author or _git_name())
+    except SubmitError as e:
+        print(f"Rejected: {e.message}")
+        if e.details:
+            print(e.details)
+        return 1
+    print(f"Added {args.name} (bot #{bot_id}) from {args.file}. A running ladder picks it up within seconds.")
     return 0
 
 
@@ -180,10 +196,12 @@ def main(argv=None) -> int:
     s.add_argument("--tunnel", action="store_true", help="also open a public Cloudflare link")
     s.add_argument("--invite", help="invite code (default: saved one, or a new random one)")
     s.add_argument("--workers", type=int, default=2, help="matches played at the same time (default 2)")
-    s.add_argument("--hands", type=int, default=400, help="hands per ladder match (default 400)")
-    s.add_argument("--timeout", type=float, default=2.0, help="seconds per decision (default 2)")
-    s.add_argument("--time-bank", type=float, default=60.0, help="total thinking seconds per half (default 60)")
+    s.add_argument("--deals", type=int, default=1000, help="deals per half (official: 1000)")
     sub.add_parser("stop", help="stop a ladder started in the background")
+    a = sub.add_parser("add", help="host only: enter a bot from a folder on this machine")
+    a.add_argument("file", help="the bot's agent.py (its folder may hold its own modules)")
+    a.add_argument("--name", required=True)
+    a.add_argument("--author", help="default: from git config")
     u = sub.add_parser("submit", help="upload a bot file to a ladder")
     u.add_argument("file")
     u.add_argument("--name", help="bot name (default: file name)")
@@ -204,6 +222,8 @@ def main(argv=None) -> int:
         return cmd_submit(args)
     if args.cmd == "list":
         return cmd_list(args)
+    if args.cmd == "add":
+        return cmd_add(args)
     return cmd_set_active(args, args.cmd == "restore")
 
 

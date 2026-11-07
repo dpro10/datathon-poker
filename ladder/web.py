@@ -7,21 +7,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from arena.match import BOTS_DIR
-
 from .core import Ladder, SubmitError
 
 STATIC = Path(__file__).resolve().parent / "static"
-MAX_BODY = 400_000
+MAX_BODY = 500_000
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 PAGES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8")}
 
 
 def make_server(ladder: Ladder, host: str, port: int) -> ThreadingHTTPServer:
-    starter = ladder.starter_zip()
-    template = (BOTS_DIR / "_template.py").read_bytes()
-
     class Handler(BaseHTTPRequestHandler):
         server_version = "PokerLadder"
         sys_version = ""
@@ -58,12 +53,6 @@ def make_server(ladder: Ladder, host: str, port: int) -> ThreadingHTTPServer:
             if m:
                 detail = ladder.bot_detail(int(m.group(1)))
                 return self._json(200, detail) if detail else self._json(404, {"error": "No such bot."})
-            if path == "/starter.zip":
-                return self._send(200, starter, "application/zip",
-                                  {"Content-Disposition": 'attachment; filename="poker-bot-starter.zip"'})
-            if path == "/my_bot.py":
-                return self._send(200, template, "text/x-python; charset=utf-8",
-                                  {"Content-Disposition": 'attachment; filename="my_bot.py"'})
             return self._json(404, {"error": "Not found."})
 
         do_HEAD = do_GET  # noqa: N815 (link previews and uptime checks)
@@ -75,7 +64,7 @@ def make_server(ladder: Ladder, host: str, port: int) -> ThreadingHTTPServer:
             except ValueError:
                 length = -1
             if length < 0 or length > MAX_BODY:
-                return self._json(413, {"error": "Too big (limit 400 KB)."})
+                return self._json(413, {"error": "Too big (limit 500 KB)."})
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except (json.JSONDecodeError, UnicodeDecodeError):

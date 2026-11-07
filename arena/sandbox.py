@@ -32,10 +32,10 @@ def _python_read_paths() -> list[str]:
     return sorted(paths)
 
 
-def profile(bot_dir: str, workdir: str) -> str:
+def profile(bot_dir: str, workdir: str, extra_reads=()) -> str:
     reads = _python_read_paths() + [
         "/System", "/usr/lib", "/usr/share", "/private/var/db/dyld", "/private/var/db/timezone",
-        "/dev", str(ROOT / "arena"), str(ROOT / "pokerlib"), bot_dir, workdir,
+        "/dev", str(ROOT / "arena"), str(ROOT / "pokerlib"), bot_dir, workdir, *map(str, extra_reads),
     ]
     read_rules = " ".join(f"(subpath {_q(p)})" for p in reads if os.path.exists(p))
     exec_rules = " ".join(f"(subpath {_q(p)})" for p in _python_read_paths() if os.path.exists(p))
@@ -49,6 +49,12 @@ def profile(bot_dir: str, workdir: str) -> str:
 (allow signal (target self))
 (deny network*)
 """
+
+
+def wrap(script: str, args: list, bot_dir: str, workdir: str, extra_reads=()) -> list[str]:
+    """Command that runs `python -I -B script *args` inside the sandbox."""
+    return ["/usr/bin/sandbox-exec", "-p", profile(bot_dir, workdir, extra_reads),
+            sys.executable, "-I", "-B", script, *map(str, args)]
 
 
 def command(bot_path: str, workdir: str) -> list[str]:

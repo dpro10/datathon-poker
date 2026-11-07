@@ -87,7 +87,7 @@ pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.45 ui-monospac
 .how li { margin-bottom: 6px; }
 a { color: var(--accent); }
 .offline { background: var(--warn-soft); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
-#rules { white-space: pre-line; }
+code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); padding: 1px 5px; border-radius: 5px; }
 </style>
 </head>
 <body>
@@ -96,7 +96,7 @@ a { color: var(--accent); }
     <div class="logo" aria-hidden="true">&#9824;</div>
     <div>
       <h1>Poker Bot Ladder</h1>
-      <div class="sub">Heads-up short-deck 5-card Pot-Limit Omaha. Enter a bot and it plays every other bot, nonstop.</div>
+      <div class="sub">TAMU Datathon Heads Up practice ladder. Official rules, official judge, every bot plays every other bot, nonstop.</div>
     </div>
   </div>
   <div class="stats" id="stats"></div>
@@ -112,8 +112,9 @@ a { color: var(--accent); }
       <div class="table-wrap">
         <table id="board">
           <thead><tr>
-            <th class="num">#</th><th>Bot</th><th class="num">Rating</th><th class="num" title="Wins-losses, then draws if any">Record</th>
-            <th class="num" title="Big blinds won per 100 hands, across all matches">bb/100</th>
+            <th class="num">#</th><th>Bot</th><th class="num">Rating</th><th class="num" title="Wins, chops, losses">W-C-L</th>
+            <th class="num" title="Tournament points per match: win 1, chop 0.5, loss 0">Score</th>
+            <th class="num" title="Big blinds won per deal, averaged over matches">bb/deal</th>
             <th class="num">Matches</th><th>Health</th>
           </tr></thead>
           <tbody></tbody>
@@ -133,7 +134,7 @@ a { color: var(--accent); }
         <label>Bot name <input name="botname" maxlength="24" placeholder="diego-v3" spellcheck="false"></label>
         <label>Your name <input name="author" maxlength="30" required></label>
         <label>Invite code <input name="invite" required spellcheck="false"></label>
-        <label>Bot file (.py) <input name="file" type="file" accept=".py" required></label>
+        <label>Your agent.py <input name="file" type="file" accept=".py" required></label>
         <button type="submit">Test and enter</button>
         <div class="result" id="enter-result" hidden></div>
       </form>
@@ -141,20 +142,17 @@ a { color: var(--accent); }
     <div class="card how">
       <h2>How it works</h2>
       <ol>
-        <li>Download the <a href="/starter.zip">starter kit</a> (or just the <a href="/my_bot.py">bot template</a>) and write your bot.</li>
-        <li>Test it locally: <code>python3 -m arena check my_bot</code></li>
-        <li>Upload it here. It plays a 20-hand test first, then joins the ladder.</li>
-        <li>Upload new versions under new names (diego-v2, diego-v3) and compare them.</li>
+        <li>Write your bot in the official <code>agent.py</code> from <a href="https://github.com/tamu-datathon-org/heads-up-bundle" rel="noopener noreferrer" target="_blank">heads-up-bundle</a>.</li>
+        <li>Upload that file here, unchanged. It plays a 40-hand test, then joins the ladder.</li>
+        <li>Upload new versions under new names (diego-v2, diego-v3) to compare them.</li>
       </ol>
-      <h3>Fair matches</h3>
-      <ul>
-        <li>Every deal is played twice with the seats swapped, so both bots get the same cards.</li>
-        <li>Rating is Elo from match wins. bb/100 is big blinds won per 100 hands.</li>
-      </ul>
-      <h3>Rules</h3>
-      <p class="sub" id="rules"></p>
-      <h3>Limits</h3>
+      <h3>Same as the tournament</h3>
       <ul class="sub" id="limits"></ul>
+      <h3>Reading the board</h3>
+      <ul class="sub">
+        <li>A match is won only if the 95% interval on bb/deal is clear of zero; otherwise it's a chop.</li>
+        <li>Score is points per match (win 1, chop 0.5, loss 0). Rating is Elo from those results.</li>
+      </ul>
     </div>
   </aside>
 </main>
