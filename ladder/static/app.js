@@ -47,6 +47,8 @@ let state = null;
 let selected = null;
 let showRetired = false;
 let retireArmed = false;
+let challengeNote = "";
+const challengePick = store.get("ladderPicks", {});
 
 async function refresh() {
   try {
@@ -116,7 +118,12 @@ function renderFeed() {
   list.replaceChildren();
   for (const r of state.running) {
     list.append(el("li", { class: "live" }, el("span", { class: "dot" }),
-      el("span", {}, el("b", { text: r.a }), " vs ", el("b", { text: r.b })), el("span", { class: "sub", text: "playing now" })));
+      el("span", {}, el("b", { text: r.a }), " vs ", el("b", { text: r.b })),
+      el("span", { class: "sub", text: r.requested ? "playing now (requested)" : "playing now" })));
+  }
+  for (const q of state.queued || []) {
+    list.append(el("li", { class: "live" }, el("span", { class: "dot wait" }),
+      el("span", {}, el("b", { text: q.a }), " vs ", el("b", { text: q.b })), el("span", { class: "sub", text: "up next (requested)" })));
   }
   for (const m of state.matches) list.append(matchItem(m, null));
   if (!list.children.length) list.append(el("li", { class: "sub", text: "Matches start as soon as two bots are entered." }));
@@ -153,11 +160,14 @@ function matchItem(m, me) {
 async function select(id) {
   selected = id;
   retireArmed = false;
+  challengeNote = "";
   if (state) renderBoard();
   await loadDetail(id, true);
 }
 
 async function loadDetail(id, scroll) {
+  const focused = document.activeElement;
+  if (!scroll && focused && focused.tagName === "SELECT" && $("#detail").contains(focused)) return;  // don't close an open picker
   try {
     const r = await fetch(`/api/bots/${id}`, { cache: "no-store" });
     if (!r.ok) return;
@@ -187,6 +197,7 @@ function renderDetail(d) {
       kpi("Score", scoreText(b.score)),
       kpi("bb/deal", bbText(b.bb_deal), tone(b.bb_deal || 0))),
     b.note ? el("p", { class: "note", text: b.note }) : null,
+    challengeBox(b),
     problems.length ? el("p", { class: "note", text: `${problems.join(", ")}. Latest: ${b.last_problem || "see the bot's output"}` }) : null,
     b.matches ? el("p", { class: "sub", text: `Slowest half used ${b.think_max.toFixed(2)}s of the ${state ? state.settings.time_bank : 8}s time bank.` }) : null,
     d.h2h.length ? el("div", {}, el("h3", { text: "Head to head" }), el("div", { class: "table-wrap" }, el("table", {},
@@ -202,6 +213,41 @@ function renderDetail(d) {
     keys[b.id] ? ownerTools(b) : null,
   ].filter(Boolean));
   if (logBox) box.append(logBox);
+}
+
+function challengeBox(b) {
+  if (!b.active || !state) return null;
+  const others = state.bots.filter((o) => o.active && o.id !== b.id);
+  if (!others.length) return null;
+  const picker = el("select", { "aria-label": `Opponent for ${b.name}` },
+    others.map((o) => el("option", { value: String(o.id), text: o.house ? `${o.name} (baseline)` : o.name })));
+  if (others.some((o) => String(o.id) === String(challengePick[b.id]))) picker.value = String(challengePick[b.id]);
+  picker.addEventListener("change", () => { challengePick[b.id] = picker.value; store.set("ladderPicks", challengePick); });
+  const note = el("div", { class: "sub", text: challengeNote });
+  const play = async (e) => {
+    const invite = $("#enter").elements.invite.value.trim() || store.get("ladderInvite", "");
+    if (!invite) { challengeNote = note.textContent = "Type the invite code in the Enter a bot form first."; return; }
+    challengePick[b.id] = picker.value;
+    store.set("ladderPicks", challengePick);
+    e.target.disabled = true;
+    try {
+      const r = await fetch("/api/challenge", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ a: b.id, b: Number(picker.value), invite }) });
+      const res = await r.json();
+      challengeNote = r.ok ? `${res.message} A full 2,000-hand match takes about 10 seconds once it starts; the result shows up below and in Matches.` : res.error;
+      note.textContent = challengeNote;
+      if (r.ok) refresh();
+    } catch {
+      challengeNote = note.textContent = "Couldn't reach the ladder. Try again.";
+    } finally {
+      e.target.disabled = false;
+    }
+  };
+  return el("div", { class: "challenge" },
+    el("h3", { text: "Play a match now" }),
+    el("div", { class: "row" }, el("b", { text: b.name }), el("span", { class: "sub", text: "vs" }), picker,
+      el("button", { onclick: play, text: "Play" })),
+    note);
 }
 
 function ownerTools(b) {

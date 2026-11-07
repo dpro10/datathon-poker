@@ -317,6 +317,28 @@ def test_ladder_end_to_end():
         assert lad.retire(bot_id, key) and not lad.bot_detail(bot_id)["bot"]["active"]
 
 
+def test_challenges_play_first():
+    from ladder.core import Ladder
+
+    with tempfile.TemporaryDirectory() as d:
+        lad = Ladder(data_dir=Path(d), invite="code-1", deals=30, workers=1)
+        lad.ensure_house_bots()
+        ids = {b["name"]: b["id"] for b in lad.state()["bots"]}
+        a, b = ids["random"], ids["always_pot"]
+        assert not lad.challenge(a, b, "wrong")[0]
+        assert not lad.challenge(a, a, "code-1")[0]
+        assert lad.challenge(a, b, "code-1")[0]
+        assert not lad.challenge(b, a, "code-1")[0]  # same pair already queued
+        assert lad.state()["queued"] == [{"a": "random", "b": "always_pot"}]
+        lad.start()
+        deadline = time.time() + 30
+        while time.time() < deadline and lad.state()["total_matches"] < 1:
+            time.sleep(0.2)
+        lad.shutdown()
+        first = lad.db.execute("SELECT a, b FROM matches ORDER BY id LIMIT 1").fetchone()
+        assert {first["a"], first["b"]} == {a, b} and lad.state()["queued"] == []
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

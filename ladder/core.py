@@ -2,6 +2,7 @@
 keeps Elo ratings from the official verdicts (win 1, chop 0.5, loss 0)."""
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 import random
@@ -134,6 +135,7 @@ class Ladder:
         self.db.executescript(SCHEMA)
         self.running: dict = {}
         self.busy_pairs: set = set()
+        self.challenges: collections.deque = collections.deque()  # matches people asked for, played first
         self.h2h: dict = {}
         for r in self.db.execute("SELECT a, b, COUNT(*) AS n FROM matches GROUP BY a, b"):
             k = frozenset((r["a"], r["b"]))
@@ -255,6 +257,26 @@ class Ladder:
             self.db.commit()
             return True
 
+    def challenge(self, a_id: int, b_id: int, invite: str) -> tuple[bool, str]:
+        """Queue a match between two bots; queued matches are played before scheduled ones."""
+        if self.invite and not secrets.compare_digest(invite.strip().encode(), self.invite.encode()):
+            return False, "Wrong invite code. Enter it in the Enter a bot form first."
+        if a_id == b_id:
+            return False, "Pick a different opponent."
+        with self.lock:
+            rows = {r["id"]: r for r in self.db.execute(
+                "SELECT id, name, active FROM bots WHERE id IN (?, ?)", (a_id, b_id))}
+            if len(rows) != 2 or not all(r["active"] for r in rows.values()):
+                return False, "Both bots must be on the ladder (not retired)."
+            pair = frozenset((a_id, b_id))
+            if any(frozenset((c["a"], c["b"])) == pair for c in self.challenges):
+                return False, "That match is already queued."
+            if len(self.challenges) >= 12:
+                return False, "The queue is full. Try again in a minute."
+            self.challenges.append({"a": a_id, "b": b_id, "a_name": rows[a_id]["name"],
+                                    "b_name": rows[b_id]["name"], "at": time.time()})
+            return True, f"Queued {rows[a_id]['name']} vs {rows[b_id]['name']} (position {len(self.challenges)})."
+
     def set_active(self, name: str, active: bool) -> bool:
         with self.lock:
             cur = self.db.execute("UPDATE bots SET active = ?, forfeit_streak = 0, note = ? WHERE name = ?",
@@ -309,9 +331,10 @@ class Ladder:
             recent = [self._match(r) for r in self.db.execute(MATCH_SELECT + " ORDER BY m.id DESC LIMIT 30")]
             total = self.db.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
             running = [dict(v) for v in self.running.values()]
+            queued = [{"a": c["a_name"], "b": c["b_name"]} for c in self.challenges]
         game = official.je
         return {
-            "bots": bots, "matches": recent, "running": running, "total_matches": total,
+            "bots": bots, "matches": recent, "running": running, "queued": queued, "total_matches": total,
             "settings": {"deals": self.deals, "time_bank": game.TIME_BANK_SECONDS, "timeout": game.ACTION_TIMEOUT_SECONDS,
                          "error_limit": game.ERROR_LIMIT, "stack": __import__("game").STARTING_STACK,
                          "sandboxed": self.sandboxed, "invite_required": bool(self.invite)},
@@ -348,6 +371,19 @@ class Ladder:
         with self.lock:
             bots = [dict(r) for r in self.db.execute(
                 "SELECT id, name, path, rating, matches FROM bots WHERE active = 1")]
+            by_id = {b["id"]: b for b in bots}
+            for c in list(self.challenges):
+                pair = frozenset((c["a"], c["b"]))
+                if c["a"] not in by_id or c["b"] not in by_id:
+                    self.challenges.remove(c)  # a bot was retired meanwhile
+                    continue
+                if pair in self.busy_pairs:
+                    continue
+                self.challenges.remove(c)
+                a, b = by_id[c["a"]], by_id[c["b"]]
+                self.busy_pairs.add(pair)
+                self.running[pair] = {"a": a["name"], "b": b["name"], "started": time.time(), "requested": True}
+                return a, b, pair
             if len(bots) < 2:
                 return None
             busy = {i for pair in self.busy_pairs for i in pair}

@@ -18,6 +18,7 @@ from .core import DATA_DIR, Ladder
 
 CONFIG = DATA_DIR / "config.json"
 PIDFILE = DATA_DIR / "server.pid"
+TUNNEL_PIDFILE = DATA_DIR / "tunnel.pid"
 URLFILE = DATA_DIR / "public_url.txt"
 KEYFILE = DATA_DIR / "my_keys.json"
 WORDS = ("ace", "king", "queen", "river", "turn", "flop", "chip", "stack", "pot", "bluff",
@@ -77,7 +78,8 @@ def cmd_serve(args) -> int:
     server = make_server(ladder, "127.0.0.1", args.port)
     ladder.start()
     PIDFILE.write_text(str(os.getpid()))
-    URLFILE.unlink(missing_ok=True)
+    if args.tunnel:
+        URLFILE.unlink(missing_ok=True)
     helpers = []
     if sys.platform == "darwin":
         helpers.append(subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())]))
@@ -101,19 +103,43 @@ def cmd_serve(args) -> int:
         for p in helpers:
             p.terminate()
         PIDFILE.unlink(missing_ok=True)
-        URLFILE.unlink(missing_ok=True)
+        if args.tunnel:
+            URLFILE.unlink(missing_ok=True)
     return 0
 
 
-def cmd_stop(args) -> int:
+def cmd_tunnel(args) -> int:
+    """Keep the public link in its own process, so restarting the ladder keeps the same link."""
+    URLFILE.unlink(missing_ok=True)
+    TUNNEL_PIDFILE.write_text(str(os.getpid()))
+    proc = _start_tunnel(args.port)
+    signal.signal(signal.SIGTERM, lambda *_: proc.terminate())
     try:
-        pid = int(PIDFILE.read_text())
-        os.kill(pid, signal.SIGTERM)
-        print(f"Stopped the ladder (pid {pid}).")
+        return proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
         return 0
+    finally:
+        URLFILE.unlink(missing_ok=True)
+        TUNNEL_PIDFILE.unlink(missing_ok=True)
+
+
+def _kill(pidfile: Path, what: str) -> bool:
+    try:
+        pid = int(pidfile.read_text())
+        os.kill(pid, signal.SIGTERM)
+        print(f"Stopped the {what} (pid {pid}).")
+        return True
     except (OSError, ValueError):
-        print("The ladder isn't running.")
-        return 1
+        print(f"The {what} isn't running.")
+        return False
+
+
+def cmd_stop(args) -> int:
+    ok = _kill(PIDFILE, "ladder")
+    if args.all:
+        ok = _kill(TUNNEL_PIDFILE, "public link") and ok
+    return 0 if ok else 1
 
 
 def _git_name() -> str:
@@ -197,7 +223,10 @@ def main(argv=None) -> int:
     s.add_argument("--invite", help="invite code (default: saved one, or a new random one)")
     s.add_argument("--workers", type=int, default=2, help="matches played at the same time (default 2)")
     s.add_argument("--deals", type=int, default=1000, help="deals per half (official: 1000)")
-    sub.add_parser("stop", help="stop a ladder started in the background")
+    st = sub.add_parser("stop", help="stop a ladder started in the background")
+    st.add_argument("--all", action="store_true", help="also close the public link")
+    tn = sub.add_parser("tunnel", help="open the public link in its own process (survives ladder restarts)")
+    tn.add_argument("--port", type=int, default=8787)
     a = sub.add_parser("add", help="host only: enter a bot from a folder on this machine")
     a.add_argument("file", help="the bot's agent.py (its folder may hold its own modules)")
     a.add_argument("--name", required=True)
@@ -218,6 +247,8 @@ def main(argv=None) -> int:
         return cmd_serve(args)
     if args.cmd == "stop":
         return cmd_stop(args)
+    if args.cmd == "tunnel":
+        return cmd_tunnel(args)
     if args.cmd == "submit":
         return cmd_submit(args)
     if args.cmd == "list":

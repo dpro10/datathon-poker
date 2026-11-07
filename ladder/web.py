@@ -78,6 +78,13 @@ def make_server(ladder: Ladder, host: str, port: int) -> ThreadingHTTPServer:
                 except SubmitError as e:
                     return self._json(400, {"error": e.message, "details": e.details})
                 return self._json(201, {"id": bot_id, "key": key})
+            if path == "/api/challenge":
+                try:
+                    a, b = int(body.get("a")), int(body.get("b"))
+                except (TypeError, ValueError):
+                    return self._json(400, {"error": "Pick two bots."})
+                ok, message = ladder.challenge(a, b, str(body.get("invite", "")))
+                return self._json(200 if ok else 400, {"ok": ok, "message": message} if ok else {"error": message})
             m = re.fullmatch(r"/api/bots/(\d+)/(retire|log)", path)
             if m:
                 bot_id, action, key = int(m.group(1)), m.group(2), str(body.get("key", ""))
