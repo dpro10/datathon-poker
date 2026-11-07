@@ -6,9 +6,11 @@ if the opponent holds candidate k. At our nodes we pick the action with the best
 weighted mean (weights = our posterior over the opponent's hand at that node); at
 the opponent's nodes the model gives P(action | candidate strength).
 
-When the street ends with chips behind, a leaf estimates the rest of the hand:
-    pot * (e + eta_pos * e * (1 - e)) + lam * min(stack, pot) * (2e - 1)|2e - 1|
-(eta: positional realization, lam: money still to go in, won by the stronger hand).
+When the street ends with chips behind, a leaf estimates the rest of the hand
+(fitted on self-play data, dev/leaf_data.py): with d = 2e - 1 and spr = stack / pot,
+    pot * (e + eta_pos * e(1 - e) + min(spr, kappa_s) * (b_s * d + c_s * d|d|))
+eta: positional realization; the min(spr, kappa) term is the money still to go in,
+won by the stronger hand; s is the street that starts at the leaf.
 """
 from __future__ import annotations
 
@@ -18,19 +20,43 @@ from .betting import CALL, FOLD, BState
 from .model import classify
 
 DEFAULT_PARAMS = {
-    "eta": 0.10,          # positional equity realization
-    "lam": 0.15,          # future-street money won by the stronger hand
+    "eta": 0.0,           # positional equity realization
+    "leaf_scale": 1.0,    # multiplies the future-money term
     "tree_raises": 2,     # raises explored beyond the root state
+    "prior_strength": 6.0,  # pseudo-counts per (class, bin) for the opponent model prior
+    "sigma_wr0": 1.0,     # prior win rate (bb/hand) for the opponent-weakness estimate
+    "sigma_n0": 100.0,    # ...and its weight in hands
+    "sigma_full": 2.0,    # win rate (bb/hand) at which the leaf is fully "weak opponent"
 }
+
+# Future-money curves per unit of min(spr, kappa), as a function of d = 2e - 1, for the
+# street that starts at the leaf (index 1..3). Fitted with dev/leaf_data.py:
+#   EVEN: self-play (equal skill), symmetric;  WEAK: vs the practice pool, convex.
+LEAF_KAPPA = (0.0, 3.0, 2.0, 1.0)
+LEAF_EVEN = ((0, 0), (0.658, -0.359), (0.262, 0.008), (0.063, 0.063))          # b*d + c*d|d|
+LEAF_WEAK = ((0, 0, 0, 0), (1.427, -0.466, 0.222, 0.008), (0.628, 0.121, 0.013, -0.224),
+             (0.257, 0.257, 0.076, -0.076))                                     # up1 d+ + up2 d+^2 + dn1 d- + dn2 d-^2
+
+
+def future_curve(e: np.ndarray, street: int, sigma: float) -> np.ndarray:
+    if street < 1 or street > 3:
+        return np.zeros_like(e)
+    d = 2.0 * e - 1.0
+    b, c = LEAF_EVEN[street]
+    even = b * d + c * d * np.abs(d)
+    u1, u2, d1, d2 = LEAF_WEAK[street]
+    dp, dn = np.maximum(d, 0.0), np.minimum(d, 0.0)
+    weak = u1 * dp + u2 * dp * dp + d1 * dn + d2 * dn * dn
+    return (1.0 - sigma) * even + sigma * weak
 
 
 class Search:
-    def __init__(self, probs_fn, e: np.ndarray, root: BState, params: dict):
+    def __init__(self, probs_fn, e: np.ndarray, root: BState, params: dict, sigma: float = 0.0):
         self.probs_fn = probs_fn
         self.e = e
-        d = 2.0 * e - 1.0
         self.e_var = e * (1.0 - e)
-        self.e_sq = d * np.abs(d)
+        self.sigma = sigma
+        self.curve = future_curve(e, root.street + 1, sigma)
         self.root_contrib = root.contrib[0]
         self.root_street = root.street
         self.root_raises = root.raises
@@ -41,9 +67,11 @@ class Search:
     def leaf(self, st: BState):
         P = st.pot
         S = min(st.stacks)
-        r = min(1.0, S / P) if P > 0 else 0.0
-        eta = self.p["eta"] * r * (1.0 if st.button == 0 else -1.0)
-        return P * self.e + (P * eta) * self.e_var + (self.p["lam"] * min(S, P)) * self.e_sq
+        spr = S / P if P > 0 else 0.0
+        p = self.p
+        eta = p["eta"] * min(1.0, spr) * (1.0 if st.button == 0 else -1.0)
+        m = min(spr, LEAF_KAPPA[st.street]) * p["leaf_scale"] * P
+        return P * self.e + (P * eta) * self.e_var + m * self.curve
 
     def value(self, st: BState, w: np.ndarray):
         self.nodes += 1

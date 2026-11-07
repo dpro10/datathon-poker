@@ -1,16 +1,16 @@
 """Opponent model: P(action | situation class, hand-strength percentile).
 
-Situation classes (from the acting player's point of view):
-  0 PRE_OPEN       small blind's first decision (fold / limp / raise)
-  1 PRE_VS_LIMP    big blind after a limp (check / raise)
-  2 PRE_VS_HALF    facing the first preflop raise, half-pot sized
-  3 PRE_VS_POT     facing the first preflop raise, pot sized
-  4 PRE_VS_RERAISE facing a re-raise preflop
-  5 + 4*(street-1) + k for street = flop/turn/river, k:
-       0 NOBET     nothing to call (check / bet)
-       1 VS_HALF   facing a half-pot bet
-       2 VS_POT    facing a pot bet
-       3 VS_RAISE  facing a raise
+Situation classes (from the acting player's point of view; IP = the button, who acts
+last after the flop):
+  preflop
+    0 SB open                  1 BB vs a limp            2 BB vs a half-pot open
+    3 BB vs a pot open         4 SB vs a raise after limping
+    5 SB vs a 3-bet            6 facing any further raise
+  flop / turn / river: 7 + 8 * (street - 1) + k with k =
+    0 OOP first to act (lead or check)      1 IP after a check (bet or check back)
+    2 IP facing a half-pot lead             3 IP facing a pot lead
+    4 OOP facing a half-pot bet (after checking)   5 OOP facing a pot bet
+    6 OOP facing a raise (after leading)    7 IP facing a raise (check-raise, ...)
 
 Strength u in [0, 1] is the percentile of the hand's equity vs a random hand on
 the current board (preflop: the precomputed preflop percentile). The model keeps
@@ -24,27 +24,40 @@ import numpy as np
 from .betting import FLOP, PRE, BState, HALF, POT
 
 NBIN = 5
-NCLASS = 17
+NPRE = 7
+NPOST = 8
+NCLASS = NPRE + 3 * NPOST    # 31
 NACT = 4
 CENTERS = (np.arange(NBIN) + 0.5) / NBIN
-CLASS_NAMES = ["PRE_OPEN", "PRE_VS_LIMP", "PRE_VS_HALF", "PRE_VS_POT", "PRE_VS_RERAISE"] + [
-    f"{s}_{k}" for s in ("FLOP", "TURN", "RIVER") for k in ("NOBET", "VS_HALF", "VS_POT", "VS_RAISE")]
+CLASS_NAMES = ["PRE_SB_OPEN", "PRE_BB_VS_LIMP", "PRE_BB_VS_HALF", "PRE_BB_VS_POT", "PRE_SB_VS_RAISE",
+               "PRE_SB_VS_3BET", "PRE_VS_MORE"] + [
+    f"{s}_{k}" for s in ("FLOP", "TURN", "RIVER") for k in
+    ("OOP_FIRST", "IP_CHECKED_TO", "IP_VS_HALF", "IP_VS_POT", "OOP_VS_HALF", "OOP_VS_POT",
+     "OOP_VS_RAISE", "IP_VS_RAISE")]
 
 
 def classify(st: BState) -> int:
     """Class of the decision facing st.to_act."""
+    ip = st.button == st.to_act
     if st.street == PRE:
         if st.raises == 0:
-            return 0 if st.to_call() > 0 else 1
+            return 0 if ip else 1          # the button is the small blind
         if st.raises == 1:
+            if ip:
+                return 4
             return 3 if st.last_raise == POT else 2
-        return 4
-    base = 5 + 4 * (st.street - FLOP)
+        if st.raises == 2 and ip:
+            return 5
+        return 6
+    base = NPRE + NPOST * (st.street - FLOP)
     if st.raises == 0:
-        return base
+        return base + (1 if ip else 0)
     if st.raises == 1:
-        return base + (2 if st.last_raise == POT else 1)
-    return base + 3
+        pot = st.last_raise == POT
+        if ip:
+            return base + (3 if pot else 2)
+        return base + (5 if pot else 4)
+    return base + (7 if ip else 6)
 
 
 # Prior policies (probabilities over F, C, H, P by strength bin, weak -> strong).
@@ -58,13 +71,38 @@ _P_VSP = [[.80, .17, .01, .02], [.58, .38, .01, .03], [.38, .55, .03, .04], [.18
 _P_VSRA = [[.85, .14, .00, .01], [.70, .28, .00, .02], [.50, .46, .01, .03], [.28, .64, .02, .06], [.08, .60, .07, .25]]
 
 
+def load_prior() -> np.ndarray:
+    """The calibrated prior (dev/build_prior.py) if present, else the hand-made one."""
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "prior.npy")
+    try:
+        p = np.load(path)
+        if p.shape == (NCLASS, NBIN, NACT) and np.isfinite(p).all():
+            return p / p.sum(axis=2, keepdims=True)
+    except (OSError, ValueError):
+        pass
+    return default_prior()
+
+
+_PRIOR = None
+
+
+def prior() -> np.ndarray:
+    global _PRIOR
+    if _PRIOR is None:
+        _PRIOR = load_prior()
+    return _PRIOR
+
+
 def default_prior() -> np.ndarray:
     pri = np.zeros((NCLASS, NBIN, NACT))
-    pri[0], pri[1], pri[2], pri[3], pri[4] = _P_OPEN, _P_LIMP, _P_VSR1, _P_VSR1, _P_VSRR
+    pri[0], pri[1], pri[2], pri[3], pri[4], pri[5], pri[6] = _P_OPEN, _P_LIMP, _P_VSR1, _P_VSR1, _P_VSR1, _P_VSRR, _P_VSRR
     pri[3] = np.array(_P_VSR1) * [1.15, 0.95, 1, 1]
     for s in range(3):
-        b = 5 + 4 * s
-        pri[b], pri[b + 1], pri[b + 2], pri[b + 3] = _P_NOBET, _P_VSH, _P_VSP, _P_VSRA
+        b = NPRE + NPOST * s
+        pri[b], pri[b + 1] = _P_NOBET, _P_NOBET
+        pri[b + 2], pri[b + 3], pri[b + 4], pri[b + 5] = _P_VSH, _P_VSP, _P_VSH, _P_VSP
+        pri[b + 6], pri[b + 7] = _P_VSRA, _P_VSRA
     pri /= pri.sum(axis=2, keepdims=True)
     return pri
 
@@ -81,8 +119,8 @@ def interp_weights(u: np.ndarray):
 class OpponentModel:
     """Dirichlet counts over (class, bin, action); everything is plain numpy so it lives in memory."""
 
-    def __init__(self, prior: np.ndarray | None = None, strength: float = 6.0):
-        self.prior = default_prior() if prior is None else prior
+    def __init__(self, prior_probs: np.ndarray | None = None, strength: float = 6.0):
+        self.prior = prior() if prior_probs is None else prior_probs
         self.counts = self.prior * strength
         self.n_obs = np.zeros(NCLASS)
         self._cache_probs = None

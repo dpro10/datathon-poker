@@ -16,6 +16,22 @@ from .search import DEFAULT_PARAMS, Search
 
 DEBUG = os.environ.get("SDBOT_DEBUG") == "1"   # re-raise internal errors (testing only)
 
+
+def _param_overrides() -> dict:
+    """Experiments only: SDBOT_PARAMS='{"eta": 0.2}'. Never set in the tournament."""
+    raw = os.environ.get("SDBOT_PARAMS")
+    if not raw:
+        return {}
+    try:
+        import json
+        d = json.loads(raw)
+        return d if isinstance(d, dict) else {}
+    except ValueError:
+        return {}
+
+
+PARAM_OVERRIDES = _param_overrides()
+
 LEVELS = [  # (candidates, flop runouts) from richest to cheapest
     (600, 30),
     (400, 20),
@@ -24,16 +40,18 @@ LEVELS = [  # (candidates, flop runouts) from richest to cheapest
 
 
 def new_half(config, memory: dict) -> None:
-    memory["model"] = OpponentModel()
+    params = dict(DEFAULT_PARAMS, **PARAM_OVERRIDES)
+    memory["model"] = OpponentModel(strength=float(params.get("prior_strength", 6.0)))
     memory["rng"] = np.random.default_rng(1234567)
     memory["hand"] = None
     memory["time"] = 0.0
     memory["num_hands"] = int(getattr(config, "num_hands", 1000) or 1000)
     memory["bank"] = float(getattr(config, "time_bank_seconds", 8.0) or 8.0)
-    memory["params"] = dict(DEFAULT_PARAMS)
+    memory["params"] = params
     memory["level"] = 0
     memory["fallbacks"] = 0
     memory["hands_done"] = 0
+    memory["net_bb"] = 0.0
 
 
 def _level(memory, hand_index: int) -> int:
@@ -88,14 +106,24 @@ def _choose(obs, memory: dict) -> int:
         return fallback(obs)
     st = h.st
     e, u, w = h.range_now(st.street)
-    s = Search(h.probs_fn(st.street, model), e, st, memory["params"])
+    s = Search(h.probs_fn(st.street, model), e, st, memory["params"], weakness(memory))
     _, _, a, evs = s.ours(st, w)
     h.note_my_action(a, model)
     return a
 
 
+def weakness(memory: dict) -> float:
+    """How exploitable the opponent looks (0 = our equal, 1 = much weaker), from our
+    win rate this half shrunk toward a prior."""
+    p = memory["params"]
+    n = memory.get("hands_done", 0)
+    wr = (memory.get("net_bb", 0.0) + p["sigma_n0"] * p["sigma_wr0"]) / (n + p["sigma_n0"])
+    return float(min(1.0, max(0.0, wr / p["sigma_full"])))
+
+
 def on_hand_end(result, memory: dict) -> None:
     t0 = time.perf_counter()
+    memory["net_bb"] = memory.get("net_bb", 0.0) + result.my_net / 2.0
     try:
         _learn(result, memory)
     except Exception:  # noqa: BLE001
