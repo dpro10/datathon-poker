@@ -39,6 +39,10 @@ If campus Wi-Fi blocks laptop-to-laptop connections, put both laptops on one pho
 
 ## Ladder website
 
+**Moved 2026-11-07:** the live ladder now runs on Vercel at https://testyourpokerbot.us (code in
+`~/testyourpokerbot`: Vercel Sandbox VMs for matches, Neon Postgres for data). The Mac version below
+is stopped; its data was imported there.
+
 A site where people upload bots that play each other nonstop, with a live leaderboard.
 
 ```sh
