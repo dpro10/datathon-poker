@@ -185,10 +185,13 @@ class DecoupledModel(OpponentModel):
     """
 
     def __init__(self, prior_probs: np.ndarray | None = None, strength: float = 6.0,
-                 act_strength: float = 8.0, bin_strength: float = 2.0, share: float = 0.0):
+                 act_strength: float = 8.0, bin_strength: float = 2.0, share: float = 0.0,
+                 share_bins: float = 0.0):
         super().__init__(prior_probs, strength)
         self.share = share              # >0: pseudo-counts of the cross-street tendency ratios
+        self.share_bins = share_bins    # >0: the same for the strength behind each action
         self.act_strength = act_strength
+        self.bin_strength = bin_strength
         pri = self.prior                                       # (C, B, A)
         pb = np.full(NBIN, 1.0 / NBIN)
         marg = (pri * pb[None, :, None]).sum(axis=1)            # (C, A) under uniform strengths
@@ -230,11 +233,31 @@ class DecoupledModel(OpponentModel):
         tilt /= np.maximum(tilt.sum(axis=1, keepdims=True), 1e-12)
         return tilt * self.act_strength + obs
 
+    def _bin_counts(self) -> np.ndarray:
+        """Dirichlet counts for P(strength bin | action, class). With bin sharing, each
+        postflop class's prior strength profile is tilted by how the hands this opponent
+        showed down after the same action in the same situation on the other streets
+        differ from the prior (e.g. bluffing more than expected)."""
+        if self.share_bins <= 0:
+            return self.binc
+        p0 = self.binc0 / np.maximum(self.binc0.sum(axis=2, keepdims=True), 1e-12)   # (C, A, B)
+        obs = self.binc_d
+        exp = p0 * obs.sum(axis=2, keepdims=True)
+        O = np.zeros((NGROUP, NACT, NBIN))
+        E = np.zeros((NGROUP, NACT, NBIN))
+        np.add.at(O, GROUP, obs)
+        np.add.at(E, GROUP, exp)
+        r = (O + self.share_bins) / (E + self.share_bins)                  # (G, A, B)
+        tilt = p0 * r[GROUP]
+        tilt /= np.maximum(tilt.sum(axis=2, keepdims=True), 1e-12)
+        return tilt * self.bin_strength + obs
+
     def probs(self) -> np.ndarray:
         if self._cache_probs is None:
             act = self._act_counts()
             pa = act / np.maximum(act.sum(axis=1, keepdims=True), 1e-12)                    # (C, A)
-            pba = self.binc / np.maximum(self.binc.sum(axis=2, keepdims=True), 1e-12)       # (C, A, B)
+            binc = self._bin_counts()
+            pba = binc / np.maximum(binc.sum(axis=2, keepdims=True), 1e-12)                 # (C, A, B)
             joint = pa[:, :, None] * pba                                                    # (C, A, B)
             theta = np.transpose(joint, (0, 2, 1))                                          # (C, B, A)
             theta = theta / np.maximum(theta.sum(axis=2, keepdims=True), 1e-12)

@@ -105,7 +105,8 @@ def new_half(config, memory: dict) -> None:
         memory["model"] = DecoupledModel(prior_probs, strength=float(params.get("prior_strength", 6.0)),
                                          act_strength=float(params.get("act_strength", 8.0)),
                                          bin_strength=float(params.get("bin_strength", 2.0)),
-                                         share=float(params.get("share", 0.0)))
+                                         share=float(params.get("share", 0.0)),
+                                         share_bins=float(params.get("share_bins", 0.0)))
     else:
         memory["model"] = OpponentModel(strength=float(params.get("prior_strength", 6.0)))
     memory["model_s"] = None

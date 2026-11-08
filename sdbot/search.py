@@ -44,6 +44,7 @@ DEFAULT_PARAMS = {
     "bp_lo": 0.02,          # clip of the automatic weight
     "bp_hi": 0.98,
     # ---- experiments, off by default (results in dev/RESULTS.md) ---------------------------
+    "share_bins": 0.0,      # >0: also share the strength profile of each action across streets
     "rich": None,           # e.g. {"n_cand": 900, "flop_m": 40}: bigger search in big pots when time allows
     "rich_pot": 16,         # ... pot (chips) at the flop from which it applies
     "rich_slack": 0.8,      # ... only while the rest of the half at level 0 projects under this share of the budget
