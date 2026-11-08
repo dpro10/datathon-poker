@@ -216,7 +216,7 @@ def _choose(obs, memory: dict) -> int:
         memory["desyncs"] = memory.get("desyncs", 0) + 1
         return fallback(obs)
     st = h.st
-    if memory["params"].get("mode") == "blueprint":
+    if memory["params"].get("mode") == "blueprint" or st.street in memory["params"].get("bp_streets", ()):
         a = _blueprint_action(h, memory)
         if a is not None:
             h.note_my_action(a)
@@ -227,7 +227,7 @@ def _choose(obs, memory: dict) -> int:
         params = dict(params, tree_raises=h.tree_raises)
     s = Search(h.probs_fn(st.street), e, st, params, weakness(memory))
     _, _, a, evs = s.ours(st, w)
-    if params.get("kl_kappa", 0) > 0:
+    if params.get("kl_kappa", 0) > 0 or params.get("blend_hi", 0) > 0:
         a2 = _kl_choice(h, memory, evs)
         if a2 is not None:
             a = a2
@@ -264,7 +264,16 @@ def _kl_choice(h, memory: dict, evs: dict):
     p = memory["params"]
     legal = list(evs.keys())
     n = memory.get("hands_done", 0)
-    tau = p["kl_kappa"] * max(h.st.pot, 2) * p["kl_n0"] / (p["kl_n0"] + n)
+    pot = max(h.st.pot, 2)
+    if p.get("blend_hi", 0) > 0:
+        # Trust the search only as far as it is visibly beating this opponent: the
+        # temperature falls from blend_hi (play the blueprint) to blend_lo (play the
+        # search's best response) as our shrunk win rate rises toward blend_full bb/hand.
+        wr = (memory.get("net_bb", 0.0) + p["blend_n0"] * p["blend_wr0"]) / (n + p["blend_n0"])
+        sb = min(1.0, max(0.0, wr / p["blend_full"]))
+        tau = pot * (p["blend_lo"] + (p["blend_hi"] - p["blend_lo"]) * (1.0 - sb))
+    else:
+        tau = p["kl_kappa"] * pot * p["kl_n0"] / (p["kl_n0"] + n)
     tau = max(tau, 1e-6)
     prior = np.array([p_bp[a] for a in legal]) + p.get("kl_floor", 0.02)
     ev = np.array([evs[a] for a in legal])

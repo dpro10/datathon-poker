@@ -31,6 +31,12 @@ DEFAULT_PARAMS = {
     "kl_kappa": 0.0,        # >0: blend the search with the CFR blueprint (temperature per chip of pot)
     "kl_n0": 150.0,         # hands of evidence at which the temperature has halved
     "kl_floor": 0.02,       # minimum prior weight for actions the blueprint never takes
+    "blend_hi": 0.0,        # >0: win-rate-driven blend; temperature (x pot) when not winning
+    "blend_lo": 0.02,       # ... and when clearly winning (exploit)
+    "blend_wr0": 0.0,       # prior win rate (bb/hand) ...
+    "blend_n0": 50.0,       # ... worth this many hands
+    "blend_full": 0.5,      # win rate (bb/hand) at which we fully trust the search
+    "bp_streets": (),       # streets (0 = preflop ...) on which to play the blueprint outright
     "sigma_wr0": 1.0,     # prior win rate (bb/hand) for the opponent-weakness estimate
     "sigma_n0": 100.0,    # ...and its weight in hands
     "sigma_full": 2.0,    # win rate (bb/hand) at which the leaf is fully "weak opponent"

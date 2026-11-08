@@ -31,6 +31,9 @@ from game import (ERROR_LIMIT, TIME_BANK_SECONDS, Action, AgentConfig, Game,  # 
                   HandResult, Observation, button_for_deal, default_action, make_deal)
 
 _counter = itertools.count()
+# Testing on a busy machine: a bigger bank keeps the bots' time governors from reacting to
+# CPU contention, so strategy comparisons stay fair. Leave unset to mirror the judge.
+BANK = float(os.environ.get("HARNESS_BANK", TIME_BANK_SECONDS))
 
 
 def resolve(path: str) -> str:
@@ -58,7 +61,8 @@ def load_module(path: str):
 class Handle:
     """One bot for one half, with the judge's bookkeeping."""
 
-    def __init__(self, path: str, config: AgentConfig, serialize: bool = True, time_bank: float = TIME_BANK_SECONDS):
+    def __init__(self, path: str, config: AgentConfig, serialize: bool = True, time_bank: float = None):
+        time_bank = BANK if time_bank is None else time_bank
         self.path = path
         self.config = config
         self.serialize = serialize
@@ -145,7 +149,7 @@ class Handle:
 
 
 def play_half(path1: str, path2: str, seed, half: int, deals: int, serialize=True, logs=None):
-    config = AgentConfig(num_hands=deals)
+    config = AgentConfig(num_hands=deals, time_bank_seconds=BANK)
     a1 = Handle(path1, config, serialize)
     a2 = Handle(path2, config, serialize)
     a1_seat = 0 if half == 1 else 1
