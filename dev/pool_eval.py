@@ -16,7 +16,7 @@ import harness  # noqa: E402
 
 POOL = ["base_random", "base_calling_station", "base_always_pot", "base_always_half", "checkfold", "guide_example",
         "tag", "eq_tight", "eq_loose", "eq_aggro", "eq_potodds", "eqbot", "lag", "nit", "bluffer", "trapper",
-        "diego_equity", "adaptive"]
+        "diego_equity", "adaptive", "balanced", "sticky_raiser", "random_aggro", "exploiter"]
 
 
 def main():

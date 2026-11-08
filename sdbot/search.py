@@ -23,7 +23,9 @@ DEFAULT_PARAMS = {
     "eta": 0.0,           # positional equity realization
     "leaf_scale": 1.0,    # multiplies the future-money term
     "tree_raises": 2,     # raises explored beyond the root state
-    "prior_strength": 6.0,  # pseudo-counts per (class, bin) for the opponent model prior
+    "prior_strength": 6.0,  # pseudo-counts per (class, bin) for the opponent model prior (EM model)
+    "act_strength": 8.0,    # decoupled model: pseudo-counts for P(action | class)
+    "bin_strength": 2.0,    # decoupled model: pseudo-counts for P(strength bin | action, class)
     "sigma_wr0": 1.0,     # prior win rate (bb/hand) for the opponent-weakness estimate
     "sigma_n0": 100.0,    # ...and its weight in hands
     "sigma_full": 2.0,    # win rate (bb/hand) at which the leaf is fully "weak opponent"

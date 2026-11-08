@@ -11,7 +11,7 @@ from . import evaluator as ev
 from . import preflop as pf
 from .betting import CALL, FOLD, HALF, POT, PRE, RIVER
 from .hand import COARSE, HandTracker
-from .model import OpponentModel, classify
+from .model import DecoupledModel, OpponentModel, classify
 from .search import DEFAULT_PARAMS, Search
 
 DEBUG = os.environ.get("SDBOT_DEBUG") == "1"   # re-raise internal errors (testing only)
@@ -75,7 +75,12 @@ SPEED = float(os.environ["SDBOT_SPEED"]) if os.environ.get("SDBOT_SPEED") else _
 
 def new_half(config, memory: dict) -> None:
     params = dict(DEFAULT_PARAMS, **PARAM_OVERRIDES)
-    memory["model"] = OpponentModel(strength=float(params.get("prior_strength", 6.0)))
+    if params.get("model", "decoupled") == "decoupled":
+        memory["model"] = DecoupledModel(strength=float(params.get("prior_strength", 6.0)),
+                                         act_strength=float(params.get("act_strength", 8.0)),
+                                         bin_strength=float(params.get("bin_strength", 2.0)))
+    else:
+        memory["model"] = OpponentModel(strength=float(params.get("prior_strength", 6.0)))
     memory["rng"] = np.random.default_rng(1234567)
     memory["hand"] = None
     memory["time"] = 0.0

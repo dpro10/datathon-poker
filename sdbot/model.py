@@ -167,3 +167,50 @@ class OpponentModel:
     def marginal(self, cls: int) -> np.ndarray:
         """Action frequencies for a uniformly distributed strength (for reports)."""
         return self.probs()[cls].mean(axis=0)
+
+
+class DecoupledModel(OpponentModel):
+    """P(action | class) from every observation; P(strength bin | action, class) only from
+    showdowns (where we see the hand); combined with Bayes' rule:
+
+        P(a | b, c) = P(a | c) P(b | a, c) / sum_a' P(a' | c) P(b | a', c)
+
+    Unlike soft EM, a bet we folded to does not get attributed to strong hands just
+    because the prior says bets are strong, so bluff-heavy opponents are learned from
+    the showdowns we do see. Folds never show down, so their strength profile stays the
+    prior's (weak hands fold).
+    """
+
+    def __init__(self, prior_probs: np.ndarray | None = None, strength: float = 6.0,
+                 act_strength: float = 8.0, bin_strength: float = 2.0):
+        super().__init__(prior_probs, strength)
+        pri = self.prior                                       # (C, B, A)
+        pb = np.full(NBIN, 1.0 / NBIN)
+        marg = (pri * pb[None, :, None]).sum(axis=1)            # (C, A) under uniform strengths
+        self.act = marg * act_strength                          # (C, A)
+        shape = pri * pb[None, :, None]                         # (C, B, A) ~ P(b, a)
+        shape = shape / np.maximum(shape.sum(axis=1, keepdims=True), 1e-12)   # P(b | a)
+        self.binc = np.transpose(shape, (0, 2, 1)) * bin_strength              # (C, A, B)
+
+    def probs(self) -> np.ndarray:
+        if self._cache_probs is None:
+            pa = self.act / np.maximum(self.act.sum(axis=1, keepdims=True), 1e-12)          # (C, A)
+            pba = self.binc / np.maximum(self.binc.sum(axis=2, keepdims=True), 1e-12)       # (C, A, B)
+            joint = pa[:, :, None] * pba                                                    # (C, A, B)
+            theta = np.transpose(joint, (0, 2, 1))                                          # (C, B, A)
+            theta = theta / np.maximum(theta.sum(axis=2, keepdims=True), 1e-12)
+            self._cache_probs = theta
+        return self._cache_probs
+
+    def observe_known(self, cls: int, action: int, u: float, weight: float = 1.0):
+        lo, wl, wh = interp_weights(np.array([u]))
+        self.act[cls, action] += weight
+        self.binc[cls, action, lo[0]] += weight * wl[0]
+        self.binc[cls, action, lo[0] + 1] += weight * wh[0]
+        self.n_obs[cls] += weight
+        self._cache_probs = None
+
+    def observe_soft(self, cls: int, action: int, pi: np.ndarray, weight: float = 1.0):
+        self.act[cls, action] += weight
+        self.n_obs[cls] += weight
+        self._cache_probs = None
