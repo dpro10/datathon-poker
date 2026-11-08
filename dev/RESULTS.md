@@ -130,3 +130,15 @@ Experiments started before 05:35 used the v7 defaults unless their parameters sa
 | pool, seeds 5-8 (22 bots x 4) | | +0.12 per bot (se 0.05) |
 
 Became the default; snapshot `v9`. Official tests, changed-rules test and blueprint test pass.
+
+## Workflow for an A/B test
+
+1. Give the variant a parameter (off by default) in `sdbot/search.py` `DEFAULT_PARAMS`.
+2. Freeze the current default as a snapshot (`python dev/snapshot.py vN`) so later code
+   changes cannot leak into the baseline.
+3. Run both sides on the same seeds with all-in EV scoring, e.g.
+   `SDBOT_PARAMS='{"share":10}' HARNESS_BANK=40 HARNESS_ALLIN_EV=1 python dev/pool_eval.py agent.py --seeds 25-40 --only --extra dev/versions/v7/agent_v7.py dev/versions/bp1/agent_bp1.py`
+   for head-to-heads, and `--seeds 5-8` without `--only` for the 22-bot pool; save the output.
+4. `python dev/cmp_pool.py "A:out_a.txt" "B:out_b.txt"` for the paired per-opponent comparison.
+5. Check `agent.py` still mirrors the snapshot (`--only --extra dev/versions/vN/agent_vN.py`
+   must print exactly +0.000) before committing a refactor.
