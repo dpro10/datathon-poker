@@ -39,7 +39,7 @@ def analyze(logs, opp_seat_for_half, rng):
         board = cards_from_str(" ".join(lg["board"]))
         me_button = lg["button_seat"] == me_seat
         st = BState(me_button)
-        h = HandTracker(_Obs(holes[me_seat], 0, me_button), 300, rng, 24)
+        h = HandTracker(_Obs(holes[me_seat], 0, me_button), 300, rng, 24, None)
         h.board = board
         cache = {}
         for a in lg["actions"]:

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .betting import CALL, FOLD, BState
+from .betting import CALL, FOLD, HALF, BState
 from .model import classify
 
 DEFAULT_PARAMS = {
@@ -85,20 +85,26 @@ class Search:
         if st.street != self.root_street:
             return self.leaf(st) - (st.contrib[0] - self.root_contrib)
         if st.to_act == 0:
-            return self.ours(st, w)[0]
+            return self.ours(st, w, root=False)[0]
         return self.theirs(st, w)
 
-    def ours(self, st: BState, w: np.ndarray):
+    def ours(self, st: BState, w: np.ndarray, root: bool = True):
         legal = st.legal()
         if st.raises - self.root_raises >= self.max_raises:
             legal = tuple(a for a in legal if a <= CALL)
+        elif not root and HALF in legal:
+            legal = tuple(a for a in legal if a != HALF)    # deeper re-raises: pot size only
         sw = float(w.sum())
         best_v, best_ev, best_a = None, -1e18, legal[0]
         evs = {}
         for a in legal:
-            ch = st.copy()
-            ch.apply(a)
-            v = self.value(ch, w)
+            if a == FOLD:
+                v = -float(st.contrib[0] - self.root_contrib)
+                self.nodes += 1
+            else:
+                ch = st.copy()
+                ch.apply(a)
+                v = self.value(ch, w)
             ev = float(np.dot(w, v)) / sw if isinstance(v, np.ndarray) else float(v)
             evs[a] = ev
             if ev > best_ev:

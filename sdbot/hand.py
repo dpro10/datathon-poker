@@ -4,22 +4,26 @@ hands, and per-street equity / strength data.
 Candidates are uniform random 5-card hands from the 31 cards we can't see; each has
 a log-weight that accumulates log P(observed opponent action | its strength). A
 candidate that collides with a board card is simply dropped (exact conditioning).
+Preflop the range is kept over percentile bins; candidates are only built when the
+hand reaches the flop (with the preflop actions replayed onto them).
 
 Street data (computed once per street, the first time it's needed):
   e[k]   our equity vs candidate k over runouts of the remaining board
   evr[k] candidate k's equity vs a random hand (estimated by ranking it against
-         the other candidates on every runout)
+         the other candidates on every runout; flop/turn rank on a 251-level
+         quantile scale of hand strength, the river ranks exactly)
   u[k]   percentile of evr[k] among candidates = the strength used by the model
 """
 from __future__ import annotations
 
+import os
 from itertools import combinations
 
 import numpy as np
 
 from . import evaluator as ev
 from . import preflop as pf
-from .betting import CALL, FLOP, FOLD, PRE, RIVER, TURN, BState
+from .betting import FLOP, PRE, RIVER, TURN, BState
 from .model import classify
 
 BOARD_N = (0, 3, 4, 5)
@@ -27,9 +31,11 @@ POOL_SIZE = 60_000
 _rng0 = np.random.default_rng(20261107)
 POS31 = np.sort(np.argsort(_rng0.random((POOL_SIZE, 31)), axis=1)[:, :5], axis=1)
 PAIRS28 = np.array(list(combinations(range(28), 2)), dtype=np.int64)
-ONE = np.uint64(1)
 BIT = np.array([1 << c for c in range(36)], dtype=np.uint64)
-OFF = 2048  # > number of ordinals, used to sort many columns at once
+ALL36 = np.arange(36, dtype=np.uint64)
+COARSE = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "coarse.npy")).astype(np.int64)
+NO_COARSE = int(COARSE.max()) + 2
+NO_EXACT = ev.NUM_ORD + 2
 
 
 def bitmask_rows(cards: np.ndarray) -> np.ndarray:
@@ -43,13 +49,17 @@ def bitmask(cards) -> int:
     return m
 
 
+def cards_not_in(mask: int) -> np.ndarray:
+    return np.nonzero(((np.uint64(mask) >> ALL36) & np.uint64(1)) == 0)[0]
+
+
 class StreetData:
     __slots__ = ("street", "idx", "e", "evr", "u", "tables", "rmask", "cdf", "cnt", "nvalid", "evr_sorted",
-                 "my_evr", "my_u", "K", "M", "probs")
+                 "my_evr", "my_u", "K", "M", "probs", "coarse", "NO")
 
 
 class HandTracker:
-    def __init__(self, obs, n_cand: int, rng: np.random.Generator, flop_runouts: int):
+    def __init__(self, obs, n_cand: int, rng: np.random.Generator, flop_runouts: int, model):
         hole = sorted(int(c) for c in obs.hole_cards)
         self.index = obs.hand_index
         self.hole = np.array(hole, dtype=np.int64)
@@ -58,72 +68,87 @@ class HandTracker:
         self.st = BState(self.me_button)
         self.n_hist = 0
         self.rng = rng
+        self.n_cand = n_cand
         self.flop_runouts = flop_runouts
-        rem = np.array([c for c in range(36) if not (self.hole_mask >> c) & 1], dtype=np.int64)
-        start = int(rng.integers(0, POOL_SIZE - n_cand))
-        self.cand = rem[POS31[start:start + n_cand]]
-        self.cmask = bitmask_rows(self.cand)
-        self.ccodes = ev.hand_codes(self.cand)
-        self.cpre = pf.pct_many(self.cand)
-        self.logw = np.zeros(n_cand)
-        self.blogw = np.zeros(pf.NB)          # preflop range over percentile bins
+        self.model = model
+        self.cand = None                       # built lazily at the flop
+        self.blogw = np.zeros(pf.NB)           # preflop range over percentile bins
+        self.pre_recs: list[tuple] = []        # (cls, legal, j) of preflop opponent actions
         self.my_codes = ev.hand_codes_one(hole)
         self.my_cls = pf.class_of(hole)
         self.my_pre = float(pf.PCT[self.my_cls])
         self.sd: dict[int, StreetData] = {}
         self.board: list[int] = []
         self.opp_recs: list[dict] = []
-        self.my_actions: list[tuple] = []
         self.pending = None
         self.desync = False
         self.pre_probs: dict = {}
 
-    # ----- street data -----------------------------------------------------------
+    # ----- candidates --------------------------------------------------------
+
+    def _ensure_cands(self) -> None:
+        if self.cand is not None:
+            return
+        rem = cards_not_in(self.hole_mask)                     # 31 cards
+        start = int(self.rng.integers(0, POOL_SIZE - self.n_cand))
+        self.cand = rem[POS31[start:start + self.n_cand]]
+        self.cmask = bitmask_rows(self.cand)
+        ci = pf.colex(self.cand)
+        self.ccodes = pf.CODES_OF_HAND[ci].astype(np.intp)
+        self.cpre = pf.PCT[pf.CLS_OF_HAND[ci]]
+        self.logw = np.zeros(self.n_cand)
+        for cls, legal, j in self.pre_recs:
+            self.logw += np.log(self.model.action_probs(cls, self.cpre, legal)[:, j])
+
+    # ----- street data -------------------------------------------------------
 
     def street_data(self, street: int) -> StreetData:
         d = self.sd.get(street)
         if d is not None:
             return d
+        self._ensure_cands()
         n = BOARD_N[street]
         b = np.array(self.board[:n], dtype=np.int64)
-        bmask = np.uint64(bitmask(b))
-        idx = np.nonzero((self.cmask & bmask) == 0)[0]
-        known = self.hole_mask | int(bmask)
-        rem = np.array([c for c in range(36) if not (known >> c) & 1], dtype=np.int64)
+        bmask = bitmask(b)
+        idx = np.nonzero((self.cmask & np.uint64(bmask)) == 0)[0]
+        rem = cards_not_in(self.hole_mask | bmask)
         if street == RIVER:
             runouts = b[None, :]
             rmask = np.zeros(1, dtype=np.uint64)
         elif street == TURN:
-            runouts = np.concatenate([np.broadcast_to(b, (len(rem), 4)), rem[:, None]], axis=1)
+            runouts = np.empty((len(rem), 5), dtype=np.int64)
+            runouts[:, :4] = b
+            runouts[:, 4] = rem
             rmask = BIT[rem]
         else:
             m = min(self.flop_runouts, len(PAIRS28))
             pick = PAIRS28[self.rng.choice(len(PAIRS28), m, replace=False)]
             extra = rem[pick]
-            runouts = np.concatenate([np.broadcast_to(b, (m, 3)), extra], axis=1)
+            runouts = np.empty((m, 5), dtype=np.int64)
+            runouts[:, :3] = b
+            runouts[:, 3:] = extra
             rmask = BIT[extra[:, 0]] | BIT[extra[:, 1]]
         tables = ev.board_tables(runouts)                       # (225, M)
         K, M = len(idx), runouts.shape[0]
-        cs = tables[self.ccodes[idx]].max(axis=1).astype(np.int32)   # (K, M)
-        ms = tables[self.my_codes].max(axis=0).astype(np.int32)      # (M,)
-        valid = (self.cmask[idx][:, None] & rmask[None, :]) == 0      # (K, M)
+        cs = tables[self.ccodes[idx]].max(axis=1)               # (K, M) int16
+        ms = tables[self.my_codes].max(axis=0)                  # (M,)
+        valid = (self.cmask[idx][:, None] & rmask[None, :]) == 0  # (K, M)
         nv = np.maximum(valid.sum(axis=1), 1)
-        win = (ms[None, :] > cs) + 0.5 * (ms[None, :] == cs)
-        e = (win * valid).sum(axis=1) / nv
-        # rank every candidate among the valid candidates on each runout, via per-runout
-        # histograms of the ordinals: cdf[m, o] = #valid candidates scoring below o on runout m
-        NO = ev.NUM_ORD + 2
+        win2 = (ms > cs).astype(np.int16) * 2 + (ms == cs)      # 2 = win, 1 = tie
+        e = (win2 * valid).sum(axis=1) / (2.0 * nv)
+        # rank every candidate among the valid candidates on each runout via histograms
+        coarse = street != RIVER
+        NO = NO_COARSE if coarse else NO_EXACT
+        cskey = COARSE[cs] if coarse else cs.astype(np.int64)
         offs = np.arange(M, dtype=np.int64) * NO
-        keyed = cs + offs[None, :]                               # (K, M)
-        cnt = np.bincount(keyed[valid], minlength=M * NO)         # (M*NO,)
-        cdf = np.cumsum(cnt) - cnt                                # exclusive prefix sums...
-        cdf = cdf - np.repeat(cdf[offs], NO)                      # ...restarted on every runout
-        nvalid = K - (~valid).sum(axis=0)                         # (M,)
-        less = cdf[keyed]
-        eq = cnt[keyed] - 1
-        rank = (less + 0.5 * eq) / np.maximum(nvalid - 1, 1)[None, :]
+        keyed = cskey + offs[None, :]
+        cnt = np.bincount(keyed[valid], minlength=M * NO)
+        cdf = np.cumsum(cnt) - cnt
+        cdf -= np.repeat(cdf[offs], NO)
+        nvalid = K - (~valid).sum(axis=0)
+        rank = (cdf[keyed] + 0.5 * (cnt[keyed] - 1)) / np.maximum(nvalid - 1, 1)
         evr = (rank * valid).sum(axis=1) / nv
-        mk = ms.astype(np.int64) + offs
+        mk = (COARSE[ms] if coarse else ms.astype(np.int64)) + offs
         my_evr = float(np.mean((cdf[mk] + 0.5 * cnt[mk]) / np.maximum(nvalid, 1)))
         if street == RIVER:
             u = evr
@@ -131,13 +156,12 @@ class HandTracker:
             order = np.argsort(evr, kind="stable")
             u = np.empty(K)
             u[order] = np.arange(K) / max(K - 1, 1)
-        evr_sorted = np.sort(evr)
         d = StreetData()
         d.street, d.idx, d.e, d.evr, d.u, d.tables, d.rmask = street, idx, e, evr, u, tables, rmask
-        d.cdf, d.cnt, d.nvalid, d.evr_sorted, d.K, d.M = cdf, cnt, nvalid, evr_sorted, K, M
+        d.cdf, d.cnt, d.nvalid, d.evr_sorted, d.K, d.M = cdf, cnt, nvalid, np.sort(evr), K, M
+        d.coarse, d.NO, d.my_evr = coarse, NO, my_evr
+        d.my_u = float(np.searchsorted(d.evr_sorted, my_evr) / max(K, 1))
         d.probs = {}
-        d.my_evr = my_evr
-        d.my_u = float(np.searchsorted(evr_sorted, my_evr) / max(K, 1))
         self.sd[street] = d
         return d
 
@@ -149,13 +173,11 @@ class HandTracker:
         if d is None:
             d = self.street_data(street)
         codes = ev.hand_codes_one(sorted(hand))
-        hs = d.tables[codes].max(axis=0).astype(np.int64)                 # (M,)
-        hm = np.uint64(bitmask(hand))
-        valid = (d.rmask & hm) == 0
+        hs = d.tables[codes].max(axis=0)                       # (M,)
+        valid = (d.rmask & np.uint64(bitmask(hand))) == 0
         if not valid.any():
             valid = np.ones_like(valid)
-        NO = ev.NUM_ORD + 2
-        k = hs + np.arange(d.M, dtype=np.int64) * NO
+        k = (COARSE[hs] if d.coarse else hs.astype(np.int64)) + np.arange(d.M, dtype=np.int64) * d.NO
         rank = (d.cdf[k] + 0.5 * d.cnt[k]) / np.maximum(d.nvalid, 1)
         evr = float(rank[valid].mean())
         if street == RIVER:
@@ -164,10 +186,11 @@ class HandTracker:
         hi = np.searchsorted(d.evr_sorted, evr, "right")
         return float((lo + 0.5 * (hi - lo)) / max(d.K, 1))
 
-    # ----- range -----------------------------------------------------------------
+    # ----- range ---------------------------------------------------------------
 
-    def probs_fn(self, street: int, model):
+    def probs_fn(self, street: int):
         """A cached P(action | strength) lookup for the search at this street."""
+        model = self.model
         if street == PRE:
             cache, u = self.pre_probs, pf.BIN_CENTERS
         else:
@@ -193,9 +216,16 @@ class HandTracker:
         w = np.exp(lw - lw.max())
         return d.e, d.u, w / w.sum()
 
-    # ----- replay ---------------------------------------------------------------
+    def _pi(self, street: int) -> np.ndarray:
+        if street == PRE:
+            return self.model.bin_dist(pf.BIN_CENTERS, np.exp(self.blogw - self.blogw.max()))
+        d = self.street_data(street)
+        lw = self.logw[d.idx]
+        return self.model.bin_dist(d.u, np.exp(lw - lw.max()))
 
-    def sync(self, obs, model) -> None:
+    # ----- replay ----------------------------------------------------------------
+
+    def sync(self, obs) -> None:
         self.board = [int(c) for c in obs.board]
         hist = obs.action_history
         for rec in hist[self.n_hist:]:
@@ -206,9 +236,7 @@ class HandTracker:
                 break
             a = int(rec.action)
             if seat == 1:
-                self._opp_action(a, model)
-            else:
-                self.my_actions.append((st.street, a))
+                self._opp_action(a)
             added = st.apply(a)
             if added != rec.amount:
                 self.desync = True
@@ -219,7 +247,7 @@ class HandTracker:
                 or st.to_call(0) != obs.to_call or st.stacks[0] != obs.my_stack or st.stacks[1] != obs.opp_stack):
             self.desync = True
 
-    def _opp_action(self, a: int, model) -> None:
+    def _opp_action(self, a: int) -> None:
         st = self.st
         cls = classify(st)
         legal = st.legal()
@@ -227,20 +255,18 @@ class HandTracker:
             self.desync = True
             return
         j = legal.index(a)
+        pi = self._pi(st.street)
         if st.street == PRE:
-            wb = np.exp(self.blogw - self.blogw.max())
-            pi = model.bin_dist(pf.BIN_CENTERS, wb)
-            self.logw += np.log(model.action_probs(cls, self.cpre, legal)[:, j])
-            self.blogw += np.log(self.probs_fn(PRE, model)(cls, legal)[:, j])
+            self.blogw += np.log(self.probs_fn(PRE)(cls, legal)[:, j])
+            self.pre_recs.append((cls, legal, j))
+            if self.cand is not None:
+                self.logw += np.log(self.model.action_probs(cls, self.cpre, legal)[:, j])
         else:
             d = self.street_data(st.street)
-            lw = self.logw[d.idx]
-            w = np.exp(lw - lw.max())
-            pi = model.bin_dist(d.u, w)
-            self.logw[d.idx] += np.log(self.probs_fn(st.street, model)(cls, legal)[:, j])
+            self.logw[d.idx] += np.log(self.probs_fn(st.street)(cls, legal)[:, j])
         self.opp_recs.append({"cls": cls, "act": a, "street": st.street, "pi": pi})
 
-    def note_my_action(self, a: int, model) -> None:
+    def note_my_action(self, a: int) -> None:
         """Remember the situation the opponent faces after our action, in case the hand
         ends before we see their reply (fold to our bet, check behind on the river, ...)."""
         st = self.st.copy()
@@ -248,12 +274,5 @@ class HandTracker:
         self.pending = None
         if st.over or st.to_act != 1 or st.street != self.st.street:
             return
-        cls = classify(st)
-        if st.street == PRE:
-            wb = np.exp(self.blogw - self.blogw.max())
-            pi = model.bin_dist(pf.BIN_CENTERS, wb)
-        else:
-            d = self.street_data(st.street)
-            lw = self.logw[d.idx]
-            pi = model.bin_dist(d.u, np.exp(lw - lw.max()))
-        self.pending = {"cls": cls, "street": st.street, "pi": pi, "state": st, "facing": st.to_call(1) > 0}
+        self.pending = {"cls": classify(st), "street": st.street, "pi": self._pi(st.street),
+                        "state": st, "facing": st.to_call(1) > 0}

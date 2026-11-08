@@ -42,3 +42,16 @@ def pct_of(cards) -> float:
 
 def pct_many(sorted_hands: np.ndarray) -> np.ndarray:
     return PCT[CLS_OF_HAND[colex(sorted_hands)]]
+
+
+def _all_hand_codes() -> np.ndarray:
+    """Pair codes of every 5-card hand, indexed by colex (uint8, 376992 x 10)."""
+    from itertools import combinations
+    from . import evaluator as ev
+    hands = np.array(list(combinations(range(36), 5)), dtype=np.int64)
+    out = np.empty((len(hands), 10), dtype=np.uint8)
+    out[colex(hands)] = ev.hand_codes(hands)
+    return out
+
+
+CODES_OF_HAND = _all_hand_codes()
