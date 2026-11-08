@@ -42,7 +42,7 @@ a full match against the calling station (the most decisions per hand) was charg
 4.2 s of the 8 s bank with 0 errors. The bot pins NumPy's BLAS to one thread
 (`sdbot/__init__.py`): extra BLAS threads only spin, tripling CPU use under a 1-CPU quota.
 
-**Before submitting:** set `PARTICIPANT` in `agent.py` to your team name.
+`PARTICIPANT` in `agent.py` is the team name: Minsky.
 
 ```sh
 pip install -r requirements-dev.txt

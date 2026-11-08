@@ -33,7 +33,7 @@ warmup()
 from sdbot import brain  # noqa: E402  (loads the precomputed tables at startup)
 
 # rename as your team/bot's name
-PARTICIPANT = "TotallyAwesomeDatathonParticipant"
+PARTICIPANT = "Minsky"
 AGENT_NAME = "SDBot"
 
 
