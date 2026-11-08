@@ -164,3 +164,13 @@ Next: v9 with bp_b as its model, and with both blueprints averaged (`bp_extra`).
 * `cp_detect` (h 15) on v9 vs the switching bots (seeds 1-4): switcher +2.45 / fast +2.80,
   against +2.71 / +3.02 without it - rejected. v9's gap to the pure styles' average
   (nit +1.49, maniac +5.59) is about -0.8 (v7 about -1.2).
+
+Which blueprint should the model use? Seeds 57-72 (16 each, all-in EV):
+
+| Model | vs bp1 | vs bp2 | vs v7 |
+| --- | --- | --- | --- |
+| v9 (bp_a) | -0.01 | -0.04 | +0.23 (W3) |
+| v9b (bp_b) | -0.03 | +0.05 | +0.25 (W2) |
+
+Each does slightly better against the solver it was built from (within noise). Over seeds
+1-16 and 57-72, v9 vs bp2 averages -0.10 (se ~0.06).
