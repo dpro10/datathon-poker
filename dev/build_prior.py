@@ -14,13 +14,13 @@ REALISTIC = ["tag", "eq_tight", "eq_loose", "eq_potodds", "eq_aggro", "eqbot", "
              "trapper", "adaptive", "lag", "bluffer"]
 
 
-def main(path=os.path.join(HERE, "results", "calib.npz"), alpha=2.0):
+def main(path=os.path.join(HERE, "results", "calib.npz"), alpha=2.0, out=None, names_list=None):
     d = np.load(path)
     names, counts = list(d["names"]), d["counts"]
     hand = default_prior()
     acc = np.zeros_like(hand)
     n = 0
-    for name in REALISTIC:
+    for name in (names_list or REALISTIC):
         if name not in names:
             print("missing", name)
             continue
@@ -31,7 +31,7 @@ def main(path=os.path.join(HERE, "results", "calib.npz"), alpha=2.0):
     # actions that are never legal keep probability 0
     prior[:, :, 0] = np.where(hand[:, :, 0] == 0, 0.0, prior[:, :, 0])
     prior /= prior.sum(axis=2, keepdims=True)
-    out = os.path.join(ROOT, "sdbot", "data", "prior.npy")
+    out = out or os.path.join(ROOT, "sdbot", "data", "prior.npy")
     np.save(out, prior.astype(np.float64))
     print("wrote", out, "from", n, "opponents")
     for c in range(len(CLASS_NAMES)):
@@ -39,4 +39,10 @@ def main(path=os.path.join(HERE, "results", "calib.npz"), alpha=2.0):
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--calib", default=os.path.join(HERE, "results", "calib.npz"))
+    p.add_argument("--out", default=None)
+    p.add_argument("--names", nargs="*", default=None)
+    a = p.parse_args()
+    main(a.calib, out=a.out, names_list=a.names)

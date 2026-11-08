@@ -9,7 +9,7 @@ import numpy as np
 
 from . import evaluator as ev
 from . import preflop as pf
-from .betting import CALL, FOLD, HALF, POT, PRE, RIVER
+from .betting import CALL, FOLD, HALF, POT, PRE, RIVER, RULES, set_rules
 from .hand import COARSE, HandTracker
 from .model import DecoupledModel, OpponentModel, classify
 from .search import DEFAULT_PARAMS, Search
@@ -75,8 +75,16 @@ SPEED = float(os.environ["SDBOT_SPEED"]) if os.environ.get("SDBOT_SPEED") else _
 
 def new_half(config, memory: dict) -> None:
     params = dict(DEFAULT_PARAMS, **PARAM_OVERRIDES)
+    try:
+        set_rules(getattr(config, "small_blind", 1), getattr(config, "big_blind", 2),
+                  getattr(config, "starting_stack", 80), getattr(config, "raise_cap", 4))
+    except (TypeError, ValueError):
+        pass
+    prior_probs = None
+    if params.get("prior_file"):                # experiments only
+        prior_probs = np.load(params["prior_file"])
     if params.get("model", "decoupled") == "decoupled":
-        memory["model"] = DecoupledModel(strength=float(params.get("prior_strength", 6.0)),
+        memory["model"] = DecoupledModel(prior_probs, strength=float(params.get("prior_strength", 6.0)),
                                          act_strength=float(params.get("act_strength", 8.0)),
                                          bin_strength=float(params.get("bin_strength", 2.0)))
     else:
@@ -198,6 +206,8 @@ def _choose(obs, memory: dict) -> int:
             memory["hand"] = None
             return fallback(obs)
         L = LEVELS[lvl]
+        if lvl == 0 and "l0" in memory["params"]:     # experiments only
+            L = dict(L, **memory["params"]["l0"])
         h = HandTracker(obs, L["n_cand"], memory["rng"], L["flop_m"], model)
         h.tree_raises = L["tree_raises"]
         memory["hand"] = h
@@ -227,7 +237,7 @@ def weakness(memory: dict) -> float:
 
 def on_hand_end(result, memory: dict) -> None:
     t0 = time.perf_counter()
-    memory["net_bb"] = memory.get("net_bb", 0.0) + result.my_net / 2.0
+    memory["net_bb"] = memory.get("net_bb", 0.0) + result.my_net / float(RULES["bb"] or 2)
     try:
         if memory.get("level", 0) < FALLBACK_LEVEL or memory.get("hand") is not None:
             _learn(result, memory)
@@ -247,7 +257,7 @@ def _learn(result, memory: dict) -> None:
     h = memory.get("hand")
     if h is None or h.index != result.hand_index:
         # We never acted this hand: the opponent (small blind) folded at once.
-        if not result.went_to_showdown and result.my_net == 1:
+        if not result.went_to_showdown and result.my_net == RULES["sb"]:
             model.observe_soft(0, FOLD, np.full(5, 0.2))
         return
     recs = list(h.opp_recs)
@@ -333,7 +343,7 @@ def fallback(obs) -> int:
             return CALL
         if strength > 0.93 and POT in legal:
             return POT
-        if strength > 0.30 + price or tc <= 1:
+        if strength > 0.30 + price or tc * 2 <= obs.big_blind:
             return CALL
         return FOLD if FOLD in legal else CALL
     except Exception:  # noqa: BLE001

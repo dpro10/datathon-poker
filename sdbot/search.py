@@ -40,13 +40,13 @@ LEAF_WEAK = ((0, 0, 0, 0), (1.427, -0.466, 0.222, 0.008), (0.628, 0.121, 0.013, 
              (0.257, 0.257, 0.076, -0.076))                                     # up1 d+ + up2 d+^2 + dn1 d- + dn2 d-^2
 
 
-def future_curve(e: np.ndarray, street: int, sigma: float) -> np.ndarray:
+def future_curve(e: np.ndarray, street: int, sigma: float, even_c=None, weak_c=None) -> np.ndarray:
     if street < 1 or street > 3:
         return np.zeros_like(e)
     d = 2.0 * e - 1.0
-    b, c = LEAF_EVEN[street]
+    b, c = (even_c or LEAF_EVEN)[street]
     even = b * d + c * d * np.abs(d)
-    u1, u2, d1, d2 = LEAF_WEAK[street]
+    u1, u2, d1, d2 = (weak_c or LEAF_WEAK)[street]
     dp, dn = np.maximum(d, 0.0), np.minimum(d, 0.0)
     weak = u1 * dp + u2 * dp * dp + d1 * dn + d2 * dn * dn
     return (1.0 - sigma) * even + sigma * weak
@@ -58,7 +58,7 @@ class Search:
         self.e = e
         self.e_var = e * (1.0 - e)
         self.sigma = sigma
-        self.curve = future_curve(e, root.street + 1, sigma)
+        self.curve = future_curve(e, root.street + 1, sigma, params.get("leaf_even"), params.get("leaf_weak"))
         self.root_contrib = root.contrib[0]
         self.root_street = root.street
         self.root_raises = root.raises

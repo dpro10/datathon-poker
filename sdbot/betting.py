@@ -1,34 +1,44 @@
 """Betting state for one hand, replicating game.py's rules exactly (sizes, caps, street ends).
 
-Seats here are 0 = me, 1 = opponent. Amounts are chips.
+Seats here are 0 = me, 1 = opponent. Amounts are chips. Blinds, stacks and the raise
+cap come from the match config the judge sends with /new-half (see set_rules), so a
+change of settings before the tournament doesn't break the replay.
 """
 from __future__ import annotations
 
 FOLD, CALL, HALF, POT = 0, 1, 2, 3          # same ints as game.Action
-SB, BB, STACK, CAP = 1, 2, 80, 4
+SB, BB, STACK, CAP = 1, 2, 80, 4          # defaults; the live values are in RULES
 PRE, FLOP, TURN, RIVER = 0, 1, 2, 3
+RULES = {"sb": SB, "bb": BB, "stack": STACK, "cap": CAP}
+
+
+def set_rules(small_blind=SB, big_blind=BB, starting_stack=STACK, raise_cap=CAP) -> None:
+    """Use the judge's match settings (called from new_half)."""
+    RULES.update(sb=int(small_blind), bb=int(big_blind), stack=int(starting_stack), cap=int(raise_cap))
 
 
 class BState:
     __slots__ = ("street", "bets", "stacks", "contrib", "acted", "raises", "last_inc", "to_act",
-                 "button", "over", "folded", "showdown", "last_raise")
+                 "button", "over", "folded", "showdown", "last_raise", "bb", "cap")
 
     def __init__(self, me_button: bool):
+        r = RULES
+        self.bb, self.cap = r["bb"], r["cap"]
         self.street = PRE
         self.button = 0 if me_button else 1
-        self.stacks = [STACK, STACK]
+        self.stacks = [r["stack"], r["stack"]]
         self.contrib = [0, 0]
         self.bets = [0, 0]
         self.acted = [False, False]
         self.raises = 0
-        self.last_inc = BB
+        self.last_inc = self.bb
         self.over = False
         self.folded = -1          # seat that folded
         self.showdown = False
         self.last_raise = -1      # HALF or POT for the latest raise on this street, -1 if none
         b = self.button
-        self._put(b, SB)
-        self._put(1 - b, BB)
+        self._put(b, r["sb"])
+        self._put(1 - b, self.bb)
         self.to_act = b
 
     def copy(self) -> "BState":
@@ -37,6 +47,7 @@ class BState:
         n.stacks, n.contrib, n.bets, n.acted = self.stacks[:], self.contrib[:], self.bets[:], self.acted[:]
         n.over, n.folded, n.showdown, n.to_act = self.over, self.folded, self.showdown, self.to_act
         n.last_raise = self.last_raise
+        n.bb, n.cap = self.bb, self.cap
         return n
 
     @property
@@ -54,7 +65,7 @@ class BState:
 
     def can_raise(self, seat=None) -> bool:
         s = self.to_act if seat is None else seat
-        return self.raises < CAP and self.stacks[s] > self.to_call(s) and self.stacks[1 - s] > 0
+        return self.raises < self.cap and self.stacks[s] > self.to_call(s) and self.stacks[1 - s] > 0
 
     def raise_to(self, action, seat=None) -> int:
         s = self.to_act if seat is None else seat
@@ -65,7 +76,7 @@ class BState:
         pot_to = opp_bet + pot + tc
         half_to = opp_bet + (pot + tc) // 2
         target = half_to if action == HALF else pot_to
-        min_to = opp_bet + max(self.last_inc, BB)
+        min_to = opp_bet + max(self.last_inc, self.bb)
         return min(max(target, min_to), pot_to, all_in_to)
 
     def legal(self):
@@ -110,7 +121,7 @@ class BState:
         self.bets = [0, 0]
         self.acted = [False, False]
         self.raises = 0
-        self.last_inc = BB
+        self.last_inc = self.bb
         self.last_raise = -1
         self.to_act = 1 - self.button
 
