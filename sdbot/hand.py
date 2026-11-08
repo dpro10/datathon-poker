@@ -86,6 +86,7 @@ class HandTracker:
         self.pending = None
         self.desync = False
         self.pre_probs: dict = {}
+        self.rich = None                       # (min pot, n_cand, flop runouts) for big pots, if affordable
         self.bp = None                         # blueprint opponent model: weight bp_pi in the mixture
         self.bp_pi = 0.0
         self.bp_ws = (0.0, 0.0, 0.0, 0.0)      # ... per street (equal to bp_pi unless fitted per street)
@@ -100,6 +101,10 @@ class HandTracker:
     def _ensure_cands(self) -> None:
         if self.cand is not None:
             return
+        if self.rich is not None and self.st.pot >= self.rich[0]:
+            # a big pot reached the flop and the time budget has room: search it with more
+            # candidate hands and more flop runouts
+            self.n_cand, self.flop_runouts = self.rich[1], self.rich[2]
         rem = cards_not_in(self.hole_mask)                     # 31 cards
         start = int(self.rng.integers(0, POOL_SIZE - self.n_cand))
         self.cand = rem[POS31[start:start + self.n_cand]]

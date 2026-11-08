@@ -28,6 +28,9 @@ DEFAULT_PARAMS = {
     "act_strength": 8.0,    # decoupled model: pseudo-counts for P(action | class)
     "bin_strength": 2.0,    # decoupled model: pseudo-counts for P(strength bin | action, class)
     "share": 0.0,           # >0: learn tendencies across streets (pseudo-counts of the shared ratios)
+    "rich": None,           # e.g. {"n_cand": 900, "flop_m": 40}: bigger search in big pots when time allows
+    "rich_pot": 16,         # ... pot (chips) at the flop from which it applies
+    "rich_slack": 0.8,      # ... only while the rest of the half at level 0 projects under this share of the budget
     "memory_hands": 0,      # effective memory of the opponent model in hands (0 = never forget)
     "cp_detect": False,     # detect a change of the opponent's style (CUSUM vs a short-memory model)
     "cp_mem": 30,           # ... memory of that short model in hands

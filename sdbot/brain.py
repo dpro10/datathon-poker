@@ -169,12 +169,10 @@ def _charge(memory: dict, t_internal: float, level: int) -> None:
     s[1] += 1
 
 
-def _level(memory: dict, hand_index: int) -> int:
-    """Pick the richest level whose projected charge for the rest of the half fits the budget."""
+def _projection(memory: dict, hand_index: int):
+    """(charged so far, budget, [projected total charge if the rest of the half ran at each level])."""
     bank = memory["bank"]
     charged = memory["charged"]
-    if charged > 0.8 * bank:
-        return FALLBACK_LEVEL
     budget = 0.55 * bank
     hands_left = max(memory["num_hands"] - hand_index, 1)
     done = max(memory.get("hands_done", 0), 1)
@@ -182,13 +180,34 @@ def _level(memory: dict, hand_index: int) -> int:
     left = hands_left * rate
     speed = memory.get("speed", 1.0)
     ovh = overhead(memory)
+    proj = []
     for lvl in range(FALLBACK_LEVEL + 1):
         tot, n = memory["lvl_charge"][lvl]
         guess = max(0.0, COST_REF[lvl] * speed + ovh - GRACE)
         per = (tot + 20 * guess) / (n + 20)          # measured, shrunk toward the guess
-        if charged + left * per <= budget:
+        proj.append(charged + left * per)
+    return charged, budget, proj
+
+
+def _level(memory: dict, hand_index: int) -> int:
+    """Pick the richest level whose projected charge for the rest of the half fits the budget."""
+    charged, budget, proj = _projection(memory, hand_index)
+    if charged > 0.8 * memory["bank"]:
+        return FALLBACK_LEVEL
+    for lvl in range(FALLBACK_LEVEL + 1):
+        if proj[lvl] <= budget:
             return lvl
     return FALLBACK_LEVEL
+
+
+def _rich_ok(memory: dict, hand_index: int) -> bool:
+    """Room for a bigger search in big pots: the rest of the half at level 0 (whose measured
+    cost includes the big-pot searches made so far) stays well inside the budget."""
+    p = memory["params"]
+    if not p.get("rich"):
+        return False
+    _, budget, proj = _projection(memory, hand_index)
+    return proj[0] <= float(p.get("rich_slack", 0.8)) * budget
 
 
 def choose_action(obs, memory: dict):
@@ -235,6 +254,9 @@ def _choose(obs, memory: dict) -> int:
             L = dict(L, **memory["params"]["l0"])
         h = HandTracker(obs, L["n_cand"], memory["rng"], L["flop_m"], model)
         h.tree_raises = L["tree_raises"]
+        if lvl == 0 and _rich_ok(memory, obs.hand_index):
+            r = memory["params"]["rich"]
+            h.rich = (int(memory["params"].get("rich_pot", 16)), int(r["n_cand"]), int(r["flop_m"]))
         h.model_s = memory.get("model_s")
         ws = bp_model_weights(memory)
         mix = max(ws) > MIX_MIN
