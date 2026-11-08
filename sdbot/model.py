@@ -29,6 +29,9 @@ NPOST = 8
 NCLASS = NPRE + 3 * NPOST    # 31
 NACT = 4
 CENTERS = (np.arange(NBIN) + 0.5) / NBIN
+# sharing groups: the same postflop situation on the flop, turn and river; preflop classes alone
+GROUP = np.array(list(range(NPOST, NPOST + NPRE)) + [k for _ in range(3) for k in range(NPOST)])
+NGROUP = NPOST + NPRE
 CLASS_NAMES = ["PRE_SB_OPEN", "PRE_BB_VS_LIMP", "PRE_BB_VS_HALF", "PRE_BB_VS_POT", "PRE_SB_VS_RAISE",
                "PRE_SB_VS_3BET", "PRE_VS_MORE"] + [
     f"{s}_{k}" for s in ("FLOP", "TURN", "RIVER") for k in
@@ -182,8 +185,10 @@ class DecoupledModel(OpponentModel):
     """
 
     def __init__(self, prior_probs: np.ndarray | None = None, strength: float = 6.0,
-                 act_strength: float = 8.0, bin_strength: float = 2.0):
+                 act_strength: float = 8.0, bin_strength: float = 2.0, share: float = 0.0):
         super().__init__(prior_probs, strength)
+        self.share = share              # >0: pseudo-counts of the cross-street tendency ratios
+        self.act_strength = act_strength
         pri = self.prior                                       # (C, B, A)
         pb = np.full(NBIN, 1.0 / NBIN)
         marg = (pri * pb[None, :, None]).sum(axis=1)            # (C, A) under uniform strengths
@@ -206,9 +211,29 @@ class DecoupledModel(OpponentModel):
         self.binc = self.binc0 + self.binc_d
         self._cache_probs = None
 
+    def _act_counts(self) -> np.ndarray:
+        """Dirichlet counts for P(action | class). With sharing, each postflop class's prior is
+        tilted by how this opponent deviates from the prior in the same situation on the
+        other streets (e.g. folding to bets more often than expected), so rarely seen spots
+        adapt from the common ones."""
+        if self.share <= 0:
+            return self.act
+        p0 = self.act0 / np.maximum(self.act0.sum(axis=1, keepdims=True), 1e-12)
+        obs = self.act_d
+        exp = p0 * obs.sum(axis=1, keepdims=True)
+        O = np.zeros((NGROUP, NACT))
+        E = np.zeros((NGROUP, NACT))
+        np.add.at(O, GROUP, obs)
+        np.add.at(E, GROUP, exp)
+        r = (O + self.share) / (E + self.share)                       # (G, A) observed / expected
+        tilt = p0 * r[GROUP]
+        tilt /= np.maximum(tilt.sum(axis=1, keepdims=True), 1e-12)
+        return tilt * self.act_strength + obs
+
     def probs(self) -> np.ndarray:
         if self._cache_probs is None:
-            pa = self.act / np.maximum(self.act.sum(axis=1, keepdims=True), 1e-12)          # (C, A)
+            act = self._act_counts()
+            pa = act / np.maximum(act.sum(axis=1, keepdims=True), 1e-12)                    # (C, A)
             pba = self.binc / np.maximum(self.binc.sum(axis=2, keepdims=True), 1e-12)       # (C, A, B)
             joint = pa[:, :, None] * pba                                                    # (C, A, B)
             theta = np.transpose(joint, (0, 2, 1))                                          # (C, B, A)

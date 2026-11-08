@@ -104,9 +104,16 @@ def new_half(config, memory: dict) -> None:
     if params.get("model", "decoupled") == "decoupled":
         memory["model"] = DecoupledModel(prior_probs, strength=float(params.get("prior_strength", 6.0)),
                                          act_strength=float(params.get("act_strength", 8.0)),
-                                         bin_strength=float(params.get("bin_strength", 2.0)))
+                                         bin_strength=float(params.get("bin_strength", 2.0)),
+                                         share=float(params.get("share", 0.0)))
     else:
         memory["model"] = OpponentModel(strength=float(params.get("prior_strength", 6.0)))
+    memory["model_s"] = None
+    if params.get("cp_detect"):
+        memory["model_s"] = DecoupledModel(prior_probs, strength=float(params.get("prior_strength", 6.0)),
+                                           act_strength=float(params.get("act_strength", 8.0)),
+                                           bin_strength=float(params.get("bin_strength", 2.0)))
+    memory["cp_s"] = 0.0
     memory["rng"] = np.random.default_rng(1234567)
     memory["hand"] = None
     memory["time"] = 0.0
@@ -228,6 +235,7 @@ def _choose(obs, memory: dict) -> int:
             L = dict(L, **memory["params"]["l0"])
         h = HandTracker(obs, L["n_cand"], memory["rng"], L["flop_m"], model)
         h.tree_raises = L["tree_raises"]
+        h.model_s = memory.get("model_s")
         ws = bp_model_weights(memory)
         mix = max(ws) > MIX_MIN
         # evidence for the weights: every hand at first or while the blueprint is in use;
@@ -239,6 +247,7 @@ def _choose(obs, memory: dict) -> int:
             h.bp = blueprint.get()
             if h.bp is not None:
                 h.bp_pi, h.bp_ws, h.ev_on = max(ws), ws, evid
+                h.bp_smooth = bool(memory["params"].get("bp_river_smooth"))
         memory["hand"] = h
     h.sync(obs)
     if h.desync:
@@ -466,6 +475,12 @@ def _learn(result, memory: dict) -> None:
     w = memory["params"].get("memory_hands", 0)
     if w and hasattr(model, "decay"):
         model.decay(1.0 - 1.0 / float(w))
+    models = [model]
+    ms = memory.get("model_s")
+    if ms is not None and not h.desync:
+        models.append(ms)
+        _change_point(memory, h.cp_ll)
+        ms.decay(1.0 - 1.0 / float(memory["params"].get("cp_mem", 30)))
     if result.opp_hole is not None and not h.desync:
         opp = [int(c) for c in result.opp_hole]
         h.board = [int(c) for c in result.board]
@@ -474,11 +489,26 @@ def _learn(result, memory: dict) -> None:
             s = r["street"]
             if s not in cache:
                 cache[s] = h.strength_of(opp, s)
-            model.observe_known(r["cls"], r["act"], cache[s])
+            for m in models:
+                m.observe_known(r["cls"], r["act"], cache[s])
     else:
         for r in recs:
-            model.observe_soft(r["cls"], r["act"], r["pi"])
+            for m in models:
+                m.observe_soft(r["cls"], r["act"], r["pi"])
     memory["hand"] = None
+
+
+def _change_point(memory: dict, x: float) -> None:
+    """CUSUM on how much better a short-memory model predicts the opponent than the full
+    model. A stationary opponent keeps the sum near 0 (the short model is noisier); after a
+    change of style the short model adapts first and the sum climbs. Then most of the old
+    observations are forgotten, so the full model re-learns quickly."""
+    p = memory["params"]
+    memory["cp_s"] = max(0.0, memory.get("cp_s", 0.0) + x)
+    if memory["cp_s"] > float(p.get("cp_h", 8.0)) and memory.get("hands_done", 0) >= 40:
+        memory["model"].decay(float(p.get("cp_keep", 0.2)))
+        memory["cp_s"] = 0.0
+        memory["cp_events"] = memory.get("cp_events", 0) + 1
 
 
 # ---------------------------------------------------------------------------

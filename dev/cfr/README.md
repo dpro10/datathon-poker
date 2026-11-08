@@ -28,3 +28,18 @@ Card abstraction (imperfect recall; the bot computes the same features live in `
 
 Training speed on 4 cores: about 330,000 iterations (two traversals each) per second; the
 first 100M iterations are discounted linearly, as in Pluribus.
+
+## Using the blueprint in the bot
+
+* **Opponent model** (`bp_auto`, see `dev/RESULTS.md`): the search predicts the opponent's
+  replies with a mixture of the blueprint (per candidate hand: its bucket from the same
+  features, at the exact tree node) and the learned class model; the mixing weight is fitted
+  online from how well each weight predicted the opponent's actions. `dev/test_blueprint_model.py`
+  checks that the tree nodes the bot follows match the official game.
+* **Playing the blueprint** (`mode: blueprint`, `bp_streets`) and **KL-regularized blends**
+  with the search (`kl_kappa`, `blend_hi`): experiments, off by default.
+* **Leaf values from blueprint self-play** (`build_leaf_table.py`, `leaf_bp`): the solver's
+  `simulate` mode records every street transition of blueprint self-play; the table of
+  "value beyond equity" by street / SPR band / position / hand-type groups did not help the
+  search (it does not play the blueprint on later streets). Off by default; the table is not
+  shipped (`python build_leaf_table.py build/sim_a.f32 128 128 128` rebuilds it).

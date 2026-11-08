@@ -1,0 +1,59 @@
+# Experiment log
+
+What was tried, how it was measured, and what it showed. Newest sections last.
+
+## How to read the numbers
+
+* A match is 1000 deals x 2 halves (duplicate: same cards, seats swapped), scored in big
+  blinds per deal (bb/deal) for the first bot. The judge calls a WIN when the 95% interval
+  of the paired-deal mean excludes 0.
+* `dev/pool_eval.py` prints, per opponent, the mean over matches and **the average per-match
+  standard error** (`se`, about 0.35 bb/deal for two strong bots). The uncertainty of a mean
+  over n matches is about `se / sqrt(n)`: 16 matches -> +-0.09, 24 -> +-0.07.
+* `HARNESS_BANK=40` gives every bot a 40 s bank so that a busy test machine does not push the
+  time governors into cheaper levels (strategy comparisons stay fair). Leave it unset to
+  mirror the judge.
+* `HARNESS_ALLIN_EV=1` scores hands that went all-in before the river by their exact equity
+  over the remaining board (sampled preflop) instead of the one runout dealt: unbiased for
+  expected winnings, lower variance (checked against brute force with the official evaluator).
+* Snapshots (`dev/snapshot.py`) freeze a version as `dev/versions/<name>/agent_<name>.py`;
+  `v7` is the search bot, `bp1` the pure CFR blueprint (128/128/128/64 buckets, 1.29B iterations).
+
+## Baselines
+
+| Bot | vs pool (22 bots, seeds 1-2) | vs v7 | vs bp1 |
+| --- | --- | --- | --- |
+| v7 (search + learned model) | 44/44 W, +5.78 avg | 0 | -0.26 (16 seeds) |
+| bp1 (pure blueprint) | 41/44 W, +1.76 avg | +0.30 (16 seeds) | 0 |
+
+Exploitation is worth +0.2 to +11 bb/deal over the blueprint against every practice bot
+(calling station +14.3 vs +3.0, sticky raiser +10.1 vs +1.7, eq_loose +8.8 vs +1.1). On the
+public ladder v7 (maroon-sd) went 381W 32C 0L; the pure blueprint (maroon-bp) only +0.25
+vs the strongest ladder bot where v7 had +0.83. The search must stay; its leak is against
+equilibrium-style opponents.
+
+## Blueprint self-play leaf values (dev/cfr/build_leaf_table.py) - rejected
+
+Street-end leaves = pot x (equity + value beyond equity under blueprint self-play), by
+SPR band, position and hand-type groups. After fixing the fit (column effects were summed
+over every row, giving -12 pot values), the table is sane (+-0.4 pot) but the search with it
+loses: -0.63 vs v7, -0.54 vs bp1 (8 seeds). Equilibrium continuation values do not describe
+how the search itself plays the later streets. Option `leaf_bp` (off).
+
+## Blueprint opponent model (`bp_model`, `bp_auto`)
+
+The opponent's action probabilities at each search node come from a mixture
+`w * blueprint(node, candidate bucket) + (1 - w) * learned class model`.
+
+| Variant | vs bp1 | vs v7 | pool |
+| --- | --- | --- | --- |
+| w = 1 fixed (8 seeds) | +0.01 | -2.21 | - |
+| w = 0.5 fixed (8 seeds) | -0.09 | +0.30 | - |
+| `bp_auto`, one weight (24 seeds) | **+0.11** | **+0.06** | 44/44, +5.65 (seeds 1-2) |
+| `bp_auto` + `bp_streetwise` (24 seeds) | -0.07 | -0.02 | 44/44, +5.67 (seeds 1-2) |
+
+`bp_auto` fits w as the posterior mean over a 21-point grid from how well each w predicted
+every opponent action (marginalized over our range for the opponent's hand). Typical fits:
+0.9 vs bp1, 0.4 vs v7 (the mixture predicts v7 better than either model alone), 0.02 vs
+pool bots. A model that only ever assumed the blueprint (w = 1) is crushed by v7, which is
+why the weight must be learned.

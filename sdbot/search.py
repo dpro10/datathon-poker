@@ -27,7 +27,12 @@ DEFAULT_PARAMS = {
     "prior_strength": 6.0,  # pseudo-counts per (class, bin) for the opponent model prior (EM model)
     "act_strength": 8.0,    # decoupled model: pseudo-counts for P(action | class)
     "bin_strength": 2.0,    # decoupled model: pseudo-counts for P(strength bin | action, class)
+    "share": 0.0,           # >0: learn tendencies across streets (pseudo-counts of the shared ratios)
     "memory_hands": 0,      # effective memory of the opponent model in hands (0 = never forget)
+    "cp_detect": False,     # detect a change of the opponent's style (CUSUM vs a short-memory model)
+    "cp_mem": 30,           # ... memory of that short model in hands
+    "cp_h": 8.0,            # ... alarm threshold (nats)
+    "cp_keep": 0.2,         # ... share of the old observations kept after an alarm
     "kl_kappa": 0.0,        # >0: blend the search with the CFR blueprint (temperature per chip of pot)
     "kl_n0": 150.0,         # hands of evidence at which the temperature has halved
     "kl_floor": 0.02,       # minimum prior weight for actions the blueprint never takes
@@ -42,6 +47,7 @@ DEFAULT_PARAMS = {
     "bp_model0": 0.5,       # automatic weight before any evidence
     "bp_temp": 1.0,         # log-likelihoods are divided by this (>1 = slower to commit)
     "bp_streetwise": False,  # fit the weight separately on each street
+    "bp_river_smooth": False,  # average blueprint rows over neighbouring river buckets
     "bp_lo": 0.02,          # clip of the automatic weight
     "bp_hi": 0.98,
     "leaf_bp": False,       # street-end leaves from blueprint self-play (data/leaf_bp.npz)

@@ -63,6 +63,13 @@ class Blueprint:
         r[bad] = 1.0
         return r / r.sum(axis=1, keepdims=True)
 
+    def rows_smooth(self, node: int, buckets: np.ndarray, legal) -> np.ndarray:
+        """rows() averaged with the neighbouring buckets (1/4, 1/2, 1/4), for the ordered
+        river buckets: an opponent's bucket is only known to about one bucket either way."""
+        hi = self.B[int(self.street[node])] - 1
+        return (0.25 * self.rows(node, np.maximum(buckets - 1, 0), legal) + 0.5 * self.rows(node, buckets, legal)
+                + 0.25 * self.rows(node, np.minimum(buckets + 1, hi), legal))
+
     def pre_bin_rows(self, node: int, legal) -> np.ndarray:
         """(NB, len(legal)) preflop action probabilities averaged over the hands in each
         strength-percentile bin (the search's preflop range representation)."""

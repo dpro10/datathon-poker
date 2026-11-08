@@ -90,6 +90,9 @@ class HandTracker:
         self.bp_pi = 0.0
         self.bp_ws = (0.0, 0.0, 0.0, 0.0)      # ... per street (equal to bp_pi unless fitted per street)
         self.ev_on = False                     # collect evidence for the blueprint weight this hand
+        self.bp_smooth = False                 # smooth blueprint rows over neighbouring river buckets
+        self.model_s = None                    # short-memory copy of the model (change detection)
+        self.cp_ll = 0.0                       # log P(actions | short model) - log P(actions | model)
         self.ev_pairs: list = []               # (street, P(action | blueprint), P(action | learned)) per opponent action
 
     # ----- candidates --------------------------------------------------------
@@ -139,11 +142,31 @@ class HandTracker:
             lw = self.logw[d.idx]
             w = np.exp(lw - lw.max())
             pc = self.model.action_probs(cls, d.u, legal)[:, j]
-            pb = self.bp.rows(node, self.candidate_buckets(street), legal)[:, j]
+            pb = self._bp_rows(street, node, self.candidate_buckets(street), legal)[:, j]
         sw = w.sum()
         lc = float(np.dot(w, pc)) / sw
         lb = float(np.dot(w, np.maximum(pb, 1e-3))) / sw
         return max(lb, 1e-6), max(lc, 1e-6)
+
+    def _bp_rows(self, street: int, node: int, buckets: np.ndarray, legal) -> np.ndarray:
+        if street == RIVER and self.bp_smooth:
+            return self.bp.rows_smooth(node, buckets, legal)
+        return self.bp.rows(node, buckets, legal)
+
+    def change_evidence(self, street: int, cls: int, legal, j: int) -> float:
+        """log P(action | short-memory model) - log P(action | model), over our current range."""
+        if street == PRE:
+            w = np.exp(self.blogw - self.blogw.max())
+            u = pf.BIN_CENTERS
+        else:
+            d = self.street_data(street)
+            lw = self.logw[d.idx]
+            w = np.exp(lw - lw.max())
+            u = d.u
+        sw = w.sum()
+        ls = float(np.dot(w, self.model_s.action_probs(cls, u, legal)[:, j])) / sw
+        lc = float(np.dot(w, self.model.action_probs(cls, u, legal)[:, j])) / sw
+        return float(np.log(max(ls, 1e-6)) - np.log(max(lc, 1e-6)))
 
     def node_now(self) -> int:
         return self.bp.node(self.actions) if self.bp is not None else -1
@@ -295,8 +318,8 @@ class HandTracker:
                         P = model.action_probs(cls, u, legal)
                         cache[(cls, legal)] = P
                     if node >= 0:
-                        P = self._mix(P, bp.pre_bin_rows(node, legal) if B is None else bp.rows(node, B, legal),
-                                      street)
+                        P = self._mix(P, bp.pre_bin_rows(node, legal) if B is None
+                                      else self._bp_rows(street, node, B, legal), street)
                     cache[key] = P
                 return P
             return g
@@ -362,6 +385,8 @@ class HandTracker:
         j = legal.index(a)
         pi = self._pi(st.street)
         node = self.node_now() if self.bp_pi > 0 else -1
+        if self.model_s is not None:
+            self.cp_ll += self.change_evidence(st.street, cls, legal, j)
         if self.ev_on:
             ev = self.evidence(st.street, cls, legal, j, node)
             if ev is not None:
