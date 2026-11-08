@@ -35,7 +35,9 @@ methods and everything that was tried: `dev/RESULTS.md`.
 Through the real judge over HTTP, with the bot in its tournament-like container (read-only,
 non-root, 1 CPU, fresh container per half), v7's worst case (a calling station, ~4 decisions
 per hand) was charged 3.2-3.5 s of the 8 s bank with 0 errors, and the official smoke test
-passes. The blueprint model adds ~0.1-0.3 ms per decision; the time governor absorbs it.
+passes. v8 (the blueprint model adds ~0.1-0.3 ms per decision) through the same judge over
+HTTP against the calling station, on a machine fully loaded by other jobs: charged 3.8 s and
+4.5 s of the 8 s bank, 0 errors.
 
 **Before submitting:** set `PARTICIPANT` in `agent.py` to your team name.
 

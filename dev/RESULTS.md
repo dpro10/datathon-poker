@@ -101,3 +101,8 @@ calibrated on these same practice bots, which favours the learned model in this 
 
 Experiments started before 05:35 used the v7 defaults unless their parameters say otherwise
 (round 4b's river-smoothing run started at the switch; treat it as A-based).
+
+* v8 through the official judge over HTTP (`dev/http_match.sh`, calling station, seed 7,
+  machine load ~8 on 4 cores): charged 3.82 s / 4.50 s of the 8 s bank, 0 errors, +14.1.
+* `bp_river_smooth` (seeds 25-40, all-in EV): -0.04 vs bp1, +0.09 vs v7 - same as without
+  (A: -0.09 / +0.10, D: -0.06 / +0.14); off.
