@@ -23,6 +23,7 @@ DEFAULT_PARAMS = {
     "eta": 0.0,           # positional equity realization
     "leaf_scale": 1.0,    # multiplies the future-money term
     "tree_raises": 2,     # raises explored beyond the root state
+    "deep_half": True,    # also consider half-pot re-raises below the root
     "prior_strength": 6.0,  # pseudo-counts per (class, bin) for the opponent model prior (EM model)
     "act_strength": 8.0,    # decoupled model: pseudo-counts for P(action | class)
     "bin_strength": 2.0,    # decoupled model: pseudo-counts for P(strength bin | action, class)
@@ -94,7 +95,7 @@ class Search:
         legal = st.legal()
         if st.raises - self.root_raises >= self.max_raises:
             legal = tuple(a for a in legal if a <= CALL)
-        elif not root and HALF in legal:
+        elif not root and HALF in legal and not self.p.get("deep_half", True):
             legal = tuple(a for a in legal if a != HALF)    # deeper re-raises: pot size only
         sw = float(w.sum())
         best_v, best_ev, best_a = None, -1e18, legal[0]

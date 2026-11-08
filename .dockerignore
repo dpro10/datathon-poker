@@ -1,8 +1,11 @@
-# Only agent.py, sdbot/ (with its data), game.py and evaluator.py are needed to play.
+# Left out of the bot's Docker image. Everything from the official bundle (agent.py,
+# game.py, evaluator.py, tools/, docker/, baseline-bots/, ...) stays in, plus sdbot/.
+# Excluded: development tooling and the older practice-arena code, which the bot never imports.
 .git
 .github
 **/__pycache__
 **/*.pyc
+.pytest_cache
 .venv
 dev/
 arena/
@@ -13,9 +16,3 @@ tests/
 official/
 pokerlib/
 runs/
-baseline-bots/
-tools/
-docker/
-*.md
-*.json
-.pytest_cache

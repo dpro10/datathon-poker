@@ -1,4 +1,50 @@
-# Datathon poker arena
+# Datathon poker: tournament bot + practice arena
+
+This repo is a valid submission for the TAMU Datathon **Heads Up** challenge (short-deck
+5-card Pot-Limit Omaha). `agent.py` and `requirements.txt` sit at the root as the rules
+require, next to unmodified copies of the organizers' `game.py`, `evaluator.py`,
+`judge_engine.py`, `test_agent.py`, `baseline-bots/`, `tools/` and `docker/`
+(from tamu-datathon-org/heads-up-bundle @ c83ab6e).
+
+## The bot (`agent.py` + `sdbot/`)
+
+`agent.py` keeps the organizers' server plumbing byte-for-byte; its three functions call
+`sdbot/brain.py`, and every call is wrapped so a bug can only ever produce a safe legal
+action, never an error.
+
+| Piece | What it does |
+| --- | --- |
+| `sdbot/evaluator.py` | Vectorized evaluator: a 45 x 165 rank table (hole pair x board triple) reduced to a 225-entry table per board. Identical to `omaha_score` on every tested hand (146k checks), ~2000x faster in batches. |
+| `sdbot/preflop.py` + `data/preflop.npz` | All 19,998 suit-classes of 5-card hands: equity vs a random hand, percentile, and equity vs each 5% slice of opponent hands (Monte Carlo, ~175k samples per class). |
+| `sdbot/hand.py` | The opponent's range as ~500 weighted candidate hands; each opponent action reweights them by how likely that action is for each hand's strength. Per street: our equity vs every candidate and each candidate's strength percentile. |
+| `sdbot/model.py` | Opponent model learned during the half: 31 situations (street, position, bet faced) x 5 strength bins x 4 actions. Action frequencies come from every hand, the strength behind each action from showdowns (so bluffs we folded to aren't explained away). Prior calibrated on a pool of practice bots. |
+| `sdbot/search.py` | Expectimax over the rest of the betting round, using the model for the opponent's replies; leaves estimate the rest of the hand with curves fitted on simulated play, blended between "equal opponent" and "weaker opponent" by how much we're winning. |
+| `sdbot/brain.py` | Ties it together; a time governor (startup CPU benchmark + measured judge round trips) keeps the time the judge charges near or below 55% of the 8 s bank, with a cheap board-aware fallback strategy. |
+
+Results in local testing (1000-deal duplicate matches, judge's 95% rule): it wins every
+match against a 22-bot practice pool (baselines, equity-threshold bots, TAG/LAG/nit, a
+balanced bluffer, adaptive exploiters) and beats all its earlier versions. Through the real
+judge over HTTP the worst case (a calling station, ~4 decisions per hand) is charged about
+2.5-3.6 s of the 8 s bank; the official smoke test passes in the tournament-like container.
+
+**Before submitting:** set `PARTICIPANT` in `agent.py` to your team name.
+
+```sh
+pip install -r requirements-dev.txt
+python -m pytest -q test_agent.py                        # official tests
+python agent.py & python baseline-bots/baseline_random.py & python judge_engine.py --deals 200
+python dev/pool_eval.py agent.py --seeds 1-2             # every practice bot, in-process (fast)
+python dev/stress.py                                     # extreme opponents: errors / desyncs / timing
+python dev/test_rules.py                                 # changed blinds / stacks / raise cap
+dev/http_match.sh dev/opponents/tag.py 7                 # one match through the real judge over HTTP
+```
+
+`dev/` (excluded from the Docker image) also holds the tools used to build the bot:
+`harness.py` (in-process judge clone), `opponents/`, `precompute_preflop.py`,
+`calibrate.py` + `build_prior.py` (opponent prior), `leaf_data.py` (leaf fits),
+`snapshot.py` (freeze a version to play against), `sweep.py` (parameter A/B tests).
+
+## Practice arena (older tooling)
 
 A fair practice arena for the TAMU Datathon **Heads Up** challenge: short-deck (6 to A),
 5-card Pot-Limit Omaha, two bots, round robin.
