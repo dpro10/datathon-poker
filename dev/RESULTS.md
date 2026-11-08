@@ -142,3 +142,8 @@ Became the default; snapshot `v9`. Official tests, changed-rules test and bluepr
 4. `python dev/cmp_pool.py "A:out_a.txt" "B:out_b.txt"` for the paired per-opponent comparison.
 5. Check `agent.py` still mirrors the snapshot (`--only --extra dev/versions/vN/agent_vN.py`
    must print exactly +0.000) before committing a refactor.
+* v9 in the tournament-like container (image = the earlier official build with /app replaced,
+  since pip cannot reach PyPI from Docker builds in this sandbox): official smoke test
+  passed; `dev/docker_match.sh` vs the calling station (seed 7, solver training on all 4
+  cores): charged 4.29 s / 5.47 s of the 8 s bank, 0 errors, +14.07. To re-measure on a
+  quiet machine.
