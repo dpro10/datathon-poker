@@ -46,6 +46,8 @@ DEFAULT_PARAMS = {
     "bp_auto": False,       # ... or fit that weight to the opponent (posterior mean over a grid)
     "bp_model0": 0.5,       # automatic weight before any evidence
     "bp_temp": 1.0,         # log-likelihoods are divided by this (>1 = slower to commit)
+    "bp_decay": 1.0,        # per-hand fading of the evidence (1 = keep all)
+    "bp_prior_k": 0.0,      # prior on the weight ~ exp(-k w) (0 = flat, start at bp_model0)
     "bp_streetwise": False,  # fit the weight separately on each street
     "bp_river_smooth": False,  # average blueprint rows over neighbouring river buckets
     "bp_lo": 0.02,          # clip of the automatic weight

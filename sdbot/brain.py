@@ -386,12 +386,16 @@ def bp_model_weights(memory: dict) -> tuple:
         w = float(p.get("bp_model", 0.0))
         return (w, w, w, w)
     ll = memory.get("pi_ll")                                 # (4, grid) log-likelihoods
+    k = float(p.get("bp_prior_k", 0.0))                      # prior ~ exp(-k w): most opponents are not solvers
     if ll is None:
-        w = float(p.get("bp_model0", 0.5))
-        return (w, w, w, w)
+        if k <= 0:
+            w = float(p.get("bp_model0", 0.5))
+            return (w, w, w, w)
+        ll = np.zeros((4, len(PI_GRID)))
     if not p.get("bp_streetwise"):
         ll = np.broadcast_to(ll.sum(axis=0), ll.shape)
-    post = np.exp((ll - ll.max(axis=1, keepdims=True)) / float(p.get("bp_temp", 1.0)))
+    ll = ll / float(p.get("bp_temp", 1.0)) - k * PI_GRID[None, :]
+    post = np.exp(ll - ll.max(axis=1, keepdims=True))
     w = post @ PI_GRID / post.sum(axis=1)
     w = np.clip(w, p.get("bp_lo", 0.02), p.get("bp_hi", 0.98))
     return tuple(float(x) for x in w)
@@ -413,7 +417,10 @@ def _note_evidence(memory: dict, pairs) -> None:
     lik = np.log(PI_GRID[None, :] * a[:, 1:2] + (1.0 - PI_GRID[None, :]) * a[:, 2:3])
     ll = np.zeros((4, len(PI_GRID)))
     np.add.at(ll, a[:, 0].astype(np.int64), lik)
-    memory["pi_ll"] = ll if memory.get("pi_ll") is None else memory["pi_ll"] + ll
+    # old evidence fades: the learned model improves as it sees more, so its early
+    # mispredictions should not keep the blueprint weight up for long
+    g = float(memory["params"].get("bp_decay", 1.0))
+    memory["pi_ll"] = ll if memory.get("pi_ll") is None else g * memory["pi_ll"] + ll
 
 
 def weakness(memory: dict) -> float:

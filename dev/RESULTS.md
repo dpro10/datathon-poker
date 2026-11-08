@@ -57,3 +57,18 @@ every opponent action (marginalized over our range for the opponent's hand). Typ
 0.9 vs bp1, 0.4 vs v7 (the mixture predicts v7 better than either model alone), 0.02 vs
 pool bots. A model that only ever assumed the blueprint (w = 1) is crushed by v7, which is
 why the weight must be learned.
+
+Follow-ups (seeds as noted; `bp_auto` = one global weight, flat prior, no decay):
+
+* **Pool cost.** Over pool seeds 1-4 (4 matches per bot), `bp_auto` averages -0.13 bb/deal
+  below v7 (se 0.05 across the 22 bots; biggest drops vs adaptive, lag, always_half, bluffer).
+  Traces show why: early in the half the learned model is still its prior, so the blueprint
+  predicts some simple bots better (0.78 weight after 10 hands vs always_half, whose half-pot
+  raises look like the blueprint's favourite open) and that early evidence keeps the weight
+  up for ~100 hands, while the blueprint's predictions in the spots that matter (folds) are
+  wrong for that bot. Candidate fix under test: fade old evidence (`bp_decay` 0.98 per hand)
+  and a prior ~exp(-4 w) on the weight (`bp_prior_k`).
+* **Informed exploiter** (`dev/exploit_test.py`: a search bot given a prior fitted to the
+  candidate's real behaviour): gains +0.13 vs `bp_auto` (12 seeds), against +0.68 vs v7.
+* `sigma_bp` (12 seeds): -0.06 vs bp1, +0.07 vs v7 - no better than plain `bp_auto`; off.
+* `leaf_bp: auto` (12 seeds): +0.02 vs bp1, +0.20 vs v7, slower - inconclusive; off.
