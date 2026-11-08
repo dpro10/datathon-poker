@@ -20,22 +20,40 @@ from .betting import CALL, FOLD, HALF, BState
 from .model import classify
 
 DEFAULT_PARAMS = {
+    # ---- search and leaves ---------------------------------------------------------------
     "eta": 0.0,           # positional equity realization
     "leaf_scale": 1.0,    # multiplies the future-money term
     "tree_raises": 2,     # raises explored beyond the root state
     "deep_half": True,    # also consider half-pot re-raises below the root
+    "sigma_wr0": 1.0,     # prior win rate (bb/hand) for the opponent-weakness estimate
+    "sigma_n0": 100.0,    # ...and its weight in hands
+    "sigma_full": 2.0,    # win rate (bb/hand) at which the leaf is fully "weak opponent"
+    # ---- learned opponent model ----------------------------------------------------------
     "prior_strength": 6.0,  # pseudo-counts per (class, bin) for the opponent model prior (EM model)
     "act_strength": 8.0,    # decoupled model: pseudo-counts for P(action | class)
     "bin_strength": 2.0,    # decoupled model: pseudo-counts for P(strength bin | action, class)
+    "memory_hands": 0,      # effective memory of the opponent model in hands (0 = never forget)
+    # ---- blueprint opponent model (v8) ---------------------------------------------------
+    "bp_model": 0.0,        # weight of the CFR blueprint in the opponent model (per candidate hand and node)
+    "bp_auto": True,        # ... or fit that weight to the opponent (posterior mean over a grid)
+    "bp_model0": 0.5,       # automatic weight before any evidence
+    "bp_temp": 1.0,         # log-likelihoods are divided by this (>1 = slower to commit)
+    "bp_decay": 0.98,       # per-hand fading of the evidence (1 = keep all)
+    "bp_prior_k": 4.0,      # prior on the weight ~ exp(-k w) (0 = flat, start at bp_model0)
+    "bp_lo": 0.02,          # clip of the automatic weight
+    "bp_hi": 0.98,
+    # ---- experiments, off by default (results in dev/RESULTS.md) ---------------------------
     "share": 0.0,           # >0: learn tendencies across streets (pseudo-counts of the shared ratios)
     "rich": None,           # e.g. {"n_cand": 900, "flop_m": 40}: bigger search in big pots when time allows
     "rich_pot": 16,         # ... pot (chips) at the flop from which it applies
     "rich_slack": 0.8,      # ... only while the rest of the half at level 0 projects under this share of the budget
-    "memory_hands": 0,      # effective memory of the opponent model in hands (0 = never forget)
     "cp_detect": False,     # detect a change of the opponent's style (CUSUM vs a short-memory model)
     "cp_mem": 30,           # ... memory of that short model in hands
     "cp_h": 8.0,            # ... alarm threshold (nats)
     "cp_keep": 0.2,         # ... share of the old observations kept after an alarm
+    "bp_streetwise": False,  # fit the blueprint weight separately on each street
+    "bp_river_smooth": False,  # average blueprint rows over neighbouring river buckets
+    "sigma_bp": False,      # scale the leaf weakness by (1 - blueprint weight)
     "kl_kappa": 0.0,        # >0: blend the search with the CFR blueprint (temperature per chip of pot)
     "kl_n0": 150.0,         # hands of evidence at which the temperature has halved
     "kl_floor": 0.02,       # minimum prior weight for actions the blueprint never takes
@@ -45,22 +63,8 @@ DEFAULT_PARAMS = {
     "blend_n0": 50.0,       # ... worth this many hands
     "blend_full": 0.5,      # win rate (bb/hand) at which we fully trust the search
     "bp_streets": (),       # streets (0 = preflop ...) on which to play the blueprint outright
-    "bp_model": 0.0,        # weight of the CFR blueprint in the opponent model (per candidate hand and node)
-    "bp_auto": True,        # ... or fit that weight to the opponent (posterior mean over a grid)
-    "bp_model0": 0.5,       # automatic weight before any evidence
-    "bp_temp": 1.0,         # log-likelihoods are divided by this (>1 = slower to commit)
-    "bp_decay": 0.98,       # per-hand fading of the evidence (1 = keep all)
-    "bp_prior_k": 4.0,      # prior on the weight ~ exp(-k w) (0 = flat, start at bp_model0)
-    "bp_streetwise": False,  # fit the weight separately on each street
-    "bp_river_smooth": False,  # average blueprint rows over neighbouring river buckets
-    "bp_lo": 0.02,          # clip of the automatic weight
-    "bp_hi": 0.98,
-    "leaf_bp": False,       # street-end leaves from blueprint self-play (data/leaf_bp.npz)
+    "leaf_bp": False,       # street-end leaves from blueprint self-play (data/leaf_bp.npz, not shipped)
     "leaf_bp_scale": 1.0,
-    "sigma_wr0": 1.0,     # prior win rate (bb/hand) for the opponent-weakness estimate
-    "sigma_n0": 100.0,    # ...and its weight in hands
-    "sigma_full": 2.0,    # win rate (bb/hand) at which the leaf is fully "weak opponent"
-    "sigma_bp": False,    # scale that weakness by (1 - blueprint weight of the opponent model)
 }
 
 # Future-money curves per unit of min(spr, kappa), as a function of d = 2e - 1, for the
