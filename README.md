@@ -16,18 +16,26 @@ action, never an error.
 | --- | --- |
 | `sdbot/evaluator.py` | Vectorized evaluator: a 45 x 165 rank table (hole pair x board triple) reduced to a 225-entry table per board. Identical to `omaha_score` on every tested hand (146k checks), ~2000x faster in batches. |
 | `sdbot/preflop.py` + `data/preflop.npz` | All 19,998 suit-classes of 5-card hands: equity vs a random hand, percentile, and equity vs each 5% slice of opponent hands (Monte Carlo, ~175k samples per class). |
-| `sdbot/hand.py` | The opponent's range as ~500 weighted candidate hands; each opponent action reweights them by how likely that action is for each hand's strength. Per street: our equity vs every candidate and each candidate's strength percentile. |
+| `sdbot/hand.py` | The opponent's range as ~500 weighted candidate hands; each opponent action reweights them by how likely that action is for each hand. Per street: our equity vs every candidate, each candidate's strength percentile and its blueprint bucket. |
 | `sdbot/model.py` | Opponent model learned during the half: 31 situations (street, position, bet faced) x 5 strength bins x 4 actions. Action frequencies come from every hand, the strength behind each action from showdowns (so bluffs we folded to aren't explained away). Prior calibrated on a pool of practice bots. |
+| `sdbot/blueprint.py` + `data/blueprint.npz` | An approximate equilibrium of the game from our own CFR solver (`dev/cfr/`: external-sampling MCCFR in C over the exact betting tree, 1.3B iterations, 128/128/128/64 card buckets). It is a second opponent model - what a solver would do with each candidate hand at the exact betting node - mixed with the learned one as `w * blueprint + (1 - w) * learned`. The weight is fitted to each opponent online (posterior over a grid from how well each `w` predicted every action, old evidence fading, prior leaning to 0): about 0.9 against a solver, 0.4 against an adaptive search bot, 0 against simple bots. |
 | `sdbot/search.py` | Expectimax over the rest of the betting round, using the model for the opponent's replies; leaves estimate the rest of the hand with curves fitted on simulated play, blended between "equal opponent" and "weaker opponent" by how much we're winning. |
 | `sdbot/brain.py` | Ties it together; a time governor (startup CPU benchmark + measured judge round trips) keeps the time the judge charges near or below 55% of the 8 s bank, with a cheap board-aware fallback strategy. |
 
-Results in local testing (1000-deal duplicate matches, judge's 95% rule): it won all 66
-matches against a 22-bot practice pool (baselines, equity-threshold bots, TAG/LAG/nit, a
-balanced bluffer, adaptive exploiters), and beats or ties every earlier version of itself in
-self-play. Through the real judge over HTTP, with the bot in its tournament-like container
-(read-only, non-root, 1 CPU, fresh container per half), the worst case (a calling station,
-~4 decisions per hand) was charged 3.2-3.5 s of the 8 s bank with 0 errors, and the
-official smoke test passes.
+Results in local testing (1000-deal duplicate matches, judge's 95% rule): it wins every
+match against a 22-bot practice pool (baselines, equity-threshold bots, TAG/LAG/nit, a
+balanced bluffer, adaptive exploiters). The blueprint opponent model (v8) fixed the previous version's one measured leak: v7 lost
+0.26 bb/deal to the pure CFR blueprint, while the auto-weighted model is even with it over
+40 seeds (+0.03) and slightly ahead of v7 (+0.07); the shipped settings (evidence fading,
+prior leaning to 0) did as well or better on the 16 seeds where both were run, and cost
+about 0.1 bb/deal of margin against the weakest practice bots. An opponent given a prior
+fitted to the bot's own behaviour gains +0.13 against it (+0.68 against v7). Details,
+methods and everything that was tried: `dev/RESULTS.md`.
+
+Through the real judge over HTTP, with the bot in its tournament-like container (read-only,
+non-root, 1 CPU, fresh container per half), v7's worst case (a calling station, ~4 decisions
+per hand) was charged 3.2-3.5 s of the 8 s bank with 0 errors, and the official smoke test
+passes. The blueprint model adds ~0.1-0.3 ms per decision; the time governor absorbs it.
 
 **Before submitting:** set `PARTICIPANT` in `agent.py` to your team name.
 

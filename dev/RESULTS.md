@@ -81,3 +81,23 @@ Ideas not yet tried (for later):
 * Spend more of the time bank on big pots (a richer search level when the pot is large).
 * River abstraction by equity against opponent hand clusters (blockers / nut potential) for
   the next blueprint; longer training on more cores.
+
+## v8: the new default (05:35 UTC, Nov 8)
+
+`bp_auto` + `bp_decay` 0.98 + `bp_prior_k` 4 ("D") became the default, snapshot `v8`.
+
+| Test | v7 | `bp_auto` (A) | D = v8 |
+| --- | --- | --- | --- |
+| vs bp1, seeds 25-40 (all-in EV) | - | -0.09 | -0.06 |
+| vs v7, seeds 25-40 (all-in EV) | 0 | +0.10 | +0.14 |
+| 8-bot pool subset, seeds 7-10 | +4.43 | +4.37 | +4.34 |
+| ... vs always_half alone | +6.82 | +6.10 | +6.84 |
+
+A over 40 seeds: +0.03 vs bp1, +0.07 vs v7. The decay + prior removes the always_half
+loss (the blueprint no longer holds weight for the first ~100 hands against simple bots);
+the remaining ~0.1 bb/deal margin cost against weak bots is within 2 se and changes no match
+outcome (every practice match is still won). Note that the learned model's prior was
+calibrated on these same practice bots, which favours the learned model in this test.
+
+Experiments started before 05:35 used the v7 defaults unless their parameters say otherwise
+(round 4b's river-smoothing run started at the switch; treat it as A-based).
