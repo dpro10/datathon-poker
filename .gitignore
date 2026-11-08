@@ -10,3 +10,5 @@ dev/results/
 *.log
 dev/cfr/build/
 dev/cfr/solver
+dev/cfr/solver_sim
+sdbot/data/leaf_bp.npz

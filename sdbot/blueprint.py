@@ -76,3 +76,19 @@ def get() -> Blueprint | None:
         except Exception:  # noqa: BLE001 - a broken file must never break the bot
             _BP = None
     return _BP
+
+
+_LEAF_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "leaf_bp.npz")
+_LEAF = None
+
+
+def leaf_table():
+    """The blueprint leaf table (see dev/cfr/build_leaf_table.py), or None."""
+    global _LEAF
+    if _LEAF is None and os.path.exists(_LEAF_PATH):
+        try:
+            d = np.load(_LEAF_PATH)
+            _LEAF = {k: d[k] for k in d.files}
+        except Exception:  # noqa: BLE001
+            _LEAF = {}
+    return _LEAF or None

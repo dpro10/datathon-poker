@@ -28,7 +28,7 @@ def kmeans(X, k, iters=40, seed=0):
         C = newC
         if shift < 1e-6:
             break
-    centers = np.arange(8) + 0.5
+    centers = np.arange(C.shape[1]) + 0.5
     order = np.argsort(C @ centers)              # weak -> strong by mean strength
     return C[order].astype(np.float32)
 

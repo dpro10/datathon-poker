@@ -55,7 +55,7 @@ def cards_not_in(mask: int) -> np.ndarray:
 
 class StreetData:
     __slots__ = ("street", "idx", "e", "evr", "u", "tables", "rmask", "cdf", "cnt", "nvalid", "evr_sorted",
-                 "my_evr", "my_u", "K", "M", "probs", "coarse", "NO", "my_hs")
+                 "my_evr", "my_u", "K", "M", "probs", "coarse", "NO", "my_hs", "rank", "valid", "groups")
 
 
 class HandTracker:
@@ -164,10 +164,25 @@ class HandTracker:
         d.street, d.idx, d.e, d.evr, d.u, d.tables, d.rmask = street, idx, e, evr, u, tables, rmask
         d.cdf, d.cnt, d.nvalid, d.evr_sorted, d.K, d.M = cdf, cnt, nvalid, np.sort(evr), K, M
         d.coarse, d.NO, d.my_evr, d.my_hs = coarse, NO, my_evr, my_hs
+        d.rank, d.valid, d.groups = rank, valid, None
         d.my_u = float(np.searchsorted(d.evr_sorted, my_evr) / max(K, 1))
         d.probs = {}
         self.sd[street] = d
         return d
+
+    def candidate_groups(self, street: int, centroids: np.ndarray, grp: np.ndarray) -> np.ndarray:
+        """Hand-type group of every alive candidate on a flop/turn street (blueprint buckets,
+        from each candidate's strength histogram over this street's runouts)."""
+        d = self.street_data(street)
+        if d.groups is None:
+            idx = np.minimum((d.rank * 8).astype(np.int64), 7)          # (K, M)
+            hist = np.zeros((d.K, 8))
+            rows = np.repeat(np.arange(d.K), d.M)
+            np.add.at(hist, (rows, idx.ravel()), d.valid.ravel())
+            hist /= np.maximum(hist.sum(axis=1, keepdims=True), 1)
+            dist = (hist ** 2).sum(1)[:, None] - 2 * hist @ centroids.T + (centroids ** 2).sum(1)[None, :]
+            d.groups = grp[dist.argmin(axis=1)]
+        return d.groups
 
     def strength_of(self, hand, street: int) -> float:
         """Percentile u of an arbitrary hand (e.g. the opponent's at showdown) on a street."""

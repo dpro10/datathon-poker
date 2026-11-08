@@ -225,7 +225,12 @@ def _choose(obs, memory: dict) -> int:
     params = memory["params"]
     if h.tree_raises != params.get("tree_raises", 2):
         params = dict(params, tree_raises=h.tree_raises)
-    s = Search(h.probs_fn(st.street), e, st, params, weakness(memory))
+    g_vecs, edges = (None, None)
+    if params.get("leaf_bp") and st.street < RIVER:
+        g_vecs, edges = _leaf_vectors(h, len(e))
+    s = Search(h.probs_fn(st.street), e, st, params, weakness(memory), g_vecs)
+    if g_vecs is not None:
+        s.spr_edges = edges
     _, _, a, evs = s.ours(st, w)
     if params.get("kl_kappa", 0) > 0 or params.get("blend_hi", 0) > 0:
         a2 = _kl_choice(h, memory, evs)
@@ -281,6 +286,32 @@ def _kl_choice(h, memory: dict, evs: dict):
     q = np.exp(logit - logit.max())
     q /= q.sum()
     return int(legal[int(memory["rng"].choice(len(legal), p=q))])
+
+
+def _leaf_vectors(h, n_opp: int):
+    """Blueprint leaf table rows for the current street: one vector over the opponent's
+    candidates (or preflop strength bins) per SPR band. None if anything is missing."""
+    from . import blueprint
+    bp, lt = blueprint.get(), blueprint.leaf_table()
+    if bp is None or lt is None:
+        return None, None
+    st = h.st
+    s = st.street
+    if list(lt["buckets"]) != bp.B[:3]:
+        return None, None
+    pos = 1 if st.button == 0 else 0
+    if s == PRE:
+        gm = int(lt["grp_pre"][bp.bucket(0, my_cls=h.my_cls)])
+        rows = lt["pre_bins"][:, pos, gm, :]                       # (bands, NB)
+    else:
+        d = h.street_data(s)
+        C, grp = (bp.cflop, lt["grp_flop"]) if s == 1 else (bp.cturn, lt["grp_turn"])
+        gm = int(grp[bp.bucket(s, my_hs=d.my_hs)])
+        go = h.candidate_groups(s, C, grp)
+        rows = lt["g"][s, :, pos, gm, :][:, go]                    # (bands, K)
+    if rows.shape[1] != n_opp:
+        return None, None
+    return [rows[b].astype(np.float64) for b in range(rows.shape[0])], lt["spr_edges"]
 
 
 def _blueprint_action(h, memory: dict):

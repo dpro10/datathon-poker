@@ -37,6 +37,8 @@ DEFAULT_PARAMS = {
     "blend_n0": 50.0,       # ... worth this many hands
     "blend_full": 0.5,      # win rate (bb/hand) at which we fully trust the search
     "bp_streets": (),       # streets (0 = preflop ...) on which to play the blueprint outright
+    "leaf_bp": False,       # street-end leaves from blueprint self-play (data/leaf_bp.npz)
+    "leaf_bp_scale": 1.0,
     "sigma_wr0": 1.0,     # prior win rate (bb/hand) for the opponent-weakness estimate
     "sigma_n0": 100.0,    # ...and its weight in hands
     "sigma_full": 2.0,    # win rate (bb/hand) at which the leaf is fully "weak opponent"
@@ -64,12 +66,18 @@ def future_curve(e: np.ndarray, street: int, sigma: float, even_c=None, weak_c=N
 
 
 class Search:
-    def __init__(self, probs_fn, e: np.ndarray, root: BState, params: dict, sigma: float = 0.0):
+    def __init__(self, probs_fn, e: np.ndarray, root: BState, params: dict, sigma: float = 0.0, g_vecs=None):
         self.probs_fn = probs_fn
         self.e = e
         self.e_var = e * (1.0 - e)
         self.sigma = sigma
-        self.curve = future_curve(e, root.street + 1, sigma, params.get("leaf_even"), params.get("leaf_weak"))
+        self.g_vecs = g_vecs            # blueprint leaf: per-SPR-band vectors of value beyond equity (x pot)
+        if g_vecs is not None:
+            # equal-opponent part comes from the table; keep the weak-opponent curve's share
+            self.curve = sigma * future_curve(e, root.street + 1, 1.0, params.get("leaf_even"), params.get("leaf_weak"))
+            self.g_scale = (1.0 - sigma) * params.get("leaf_bp_scale", 1.0)
+        else:
+            self.curve = future_curve(e, root.street + 1, sigma, params.get("leaf_even"), params.get("leaf_weak"))
         self.root_contrib = root.contrib[0]
         self.root_street = root.street
         self.root_raises = root.raises
@@ -84,7 +92,11 @@ class Search:
         p = self.p
         eta = p["eta"] * min(1.0, spr) * (1.0 if st.button == 0 else -1.0)
         m = min(spr, LEAF_KAPPA[st.street]) * p["leaf_scale"] * P
-        return P * self.e + (P * eta) * self.e_var + m * self.curve
+        v = P * self.e + (P * eta) * self.e_var + m * self.curve
+        if self.g_vecs is not None:
+            band = int(np.searchsorted(self.spr_edges, spr, side="right"))
+            v = v + (P * self.g_scale) * self.g_vecs[band]
+        return v
 
     def value(self, st: BState, w: np.ndarray):
         self.nodes += 1

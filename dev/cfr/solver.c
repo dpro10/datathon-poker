@@ -504,12 +504,128 @@ static void cmd_train(int argc, char **argv) {
     printf("done: %lld iterations\n", (long long)ITER);
 }
 
+
+/* ---------------------------------------------------------------- simulate -- */
+/* Play the average strategy against itself on pool deals and record, at every street
+ * transition with chips behind: street that ended, pot, effective stack, both buckets on
+ * that street, seat 0's exact all-in equity at that moment, and seat 0's value of the rest
+ * of the hand (chips received minus chips put in from then on). Seat 0 is the button. */
+static float *STRAT;
+static double equity_at(const deal_t *D, int street, rng_t *r) {
+    int h0[5], h1[5], board[5];
+    for (int i = 0; i < 5; i++) { h0[i] = D->cards[i]; h1[i] = D->cards[5 + i]; board[i] = D->cards[10 + i]; }
+    int k0[10], k1[10];
+    hand_codes(h0, k0); hand_codes(h1, k1);
+    int nb = street == 0 ? 0 : (street == 1 ? 3 : 4);
+    uint64_t used = mask_of(h0, 5) | mask_of(h1, 5) | mask_of(board, nb);
+    int rem[36], nrem = deck_without(used, rem);
+    int b5[5];
+    memcpy(b5, board, nb * sizeof(int));
+    int16_t tab[225];
+    long w2 = 0, n = 0;
+    if (street == 2) {
+        for (int i = 0; i < nrem; i++) { b5[4] = rem[i]; board_table(b5, tab);
+            int s0 = score(tab, k0), s1 = score(tab, k1); w2 += s0 > s1 ? 2 : (s0 == s1); n++; }
+    } else if (street == 1) {
+        for (int i = 0; i < nrem; i++) for (int j = i + 1; j < nrem; j++) { b5[3] = rem[i]; b5[4] = rem[j]; board_table(b5, tab);
+            int s0 = score(tab, k0), s1 = score(tab, k1); w2 += s0 > s1 ? 2 : (s0 == s1); n++; }
+    } else {
+        for (int m = 0; m < 300; m++) {
+            for (int k = 0; k < 5; k++) { int j = k + rint_(r, nrem - k); int t = rem[k]; rem[k] = rem[j]; rem[j] = t; b5[k] = rem[k]; }
+            board_table(b5, tab);
+            int s0 = score(tab, k0), s1 = score(tab, k1); w2 += s0 > s1 ? 2 : (s0 == s1); n++;
+        }
+    }
+    return w2 / (2.0 * n);
+}
+
+typedef struct { long lo, hi; float *out; long *count; uint64_t seed; } sim_job;
+#define REC 8   /* street, pot, stack, b0, b1, e0, v0, contrib */
+static void *sim_worker(void *arg) {
+    sim_job *J = arg;
+    rng_t r;
+    rseed(&r, J->seed);
+    long nrec = 0;
+    for (long i = J->lo; i < J->hi; i++) {
+        const deal_t *D = &POOL[(long)(rnext(&r) % (uint64_t)NPOOL)];
+        int n = 0;
+        float tmp[3][REC];
+        int ntmp = 0;
+        while (Tkind[n] == 0) {
+            int q = Tplayer[n], s = Tstreet[n];
+            int64_t I = Toff[n] + D->b[q][s];
+            const int32_t *ch = &Tchild[4 * n];
+            float p[4], tot = 0;
+            for (int a = 0; a < 4; a++) { p[a] = ch[a] >= 0 ? STRAT[4 * I + a] : 0; if (p[a] < 0) p[a] = 0; tot += p[a]; }
+            if (tot <= 0) { int nl = 0; for (int a = 0; a < 4; a++) if (ch[a] >= 0) nl++; for (int a = 0; a < 4; a++) p[a] = ch[a] >= 0 ? 1.0f / nl : 0; tot = 1; }
+            double x = runif(&r) * tot, c = 0;
+            int pick = -1;
+            for (int a = 0; a < 4; a++) { if (ch[a] < 0) continue; pick = a; c += p[a]; if (x < c) break; }
+            int nx = ch[pick];
+            if (Tkind[nx] == 0 && Tstreet[nx] > s && ntmp < 3) {   /* street s ended with chips behind */
+                float pot = (float)(Tcontrib[2 * nx] + Tcontrib[2 * nx + 1]);
+                float stack = 80.0f - (float)Tcontrib[2 * nx];
+                float *t = tmp[ntmp++];
+                t[0] = (float)s; t[1] = pot; t[2] = stack; t[3] = D->b[0][s]; t[4] = D->b[1][s];
+                t[5] = (float)equity_at(D, s, &r); t[7] = (float)Tcontrib[2 * nx];
+            }
+            n = nx;
+        }
+        double net0;
+        if (Tkind[n] == 1) net0 = Twin[n] == 0 ? Tcontrib[2 * n + 1] : -Tcontrib[2 * n];
+        else net0 = (double)D->result * Tcontrib[2 * n + 1];
+        for (int k = 0; k < ntmp; k++) {
+            tmp[k][6] = (float)(net0 + tmp[k][7]);
+            memcpy(&J->out[(J->lo * 3 + nrec) * REC], tmp[k], sizeof(float) * REC);
+            nrec++;
+        }
+    }
+    *J->count = nrec;
+    return NULL;
+}
+
+static void cmd_simulate(int argc, char **argv) {
+    if (argc < 10) die("simulate <pool> <B0> <B1> <B2> <B3> <strategy.f32> <n_hands> <out.f32>");
+    load_tree();
+    for (int s = 0; s < 4; s++) Bst[s] = atoi(argv[3 + s]);
+    Toff = malloc(8L * NN);
+    NI = 0;
+    for (int n = 0; n < NN; n++) { if (Tkind[n] == 0) { Toff[n] = NI; NI += Bst[Tstreet[n]]; } else Toff[n] = -1; }
+    STRAT = load_f32(argv[7], 4 * NI);
+    long nh = atol(argv[8]);
+    FILE *f = fopen(argv[2], "rb");
+    if (!f) die("pool");
+    fseek(f, 0, SEEK_END); NPOOL = ftell(f) / (long)sizeof(deal_t); fseek(f, 0, SEEK_SET);
+    POOL = malloc(sizeof(deal_t) * NPOOL);
+    if (fread(POOL, sizeof(deal_t), NPOOL, f) != (size_t)NPOOL) die("pool short");
+    fclose(f);
+    int T = nthreads_default();
+    float *out = malloc(sizeof(float) * REC * 3 * nh);
+    long counts[64];
+    pthread_t th[64];
+    sim_job jobs[64];
+    for (int t = 0; t < T; t++) {
+        jobs[t] = (sim_job){nh * t / T, nh * (t + 1) / T, out, &counts[t], 99991ULL * (t + 1) + (uint64_t)nh};
+        pthread_create(&th[t], NULL, sim_worker, &jobs[t]);
+    }
+    FILE *g = fopen(argv[9], "wb");
+    long total = 0;
+    for (int t = 0; t < T; t++) {
+        pthread_join(th[t], NULL);
+        fwrite(&out[jobs[t].lo * 3 * REC], sizeof(float), REC * counts[t], g);
+        total += counts[t];
+    }
+    fclose(g);
+    printf("simulated %ld hands, %ld street transitions\n", nh, total);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) die("usage: solver <features|pool|train> ...");
     load_tables();
     if (!strcmp(argv[1], "features")) cmd_features(argc, argv);
     else if (!strcmp(argv[1], "pool")) cmd_pool(argc, argv);
     else if (!strcmp(argv[1], "train")) cmd_train(argc, argv);
+    else if (!strcmp(argv[1], "simulate")) cmd_simulate(argc, argv);
     else die("unknown command");
     return 0;
 }
