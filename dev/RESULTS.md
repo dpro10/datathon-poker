@@ -72,3 +72,12 @@ Follow-ups (seeds as noted; `bp_auto` = one global weight, flat prior, no decay)
   candidate's real behaviour): gains +0.13 vs `bp_auto` (12 seeds), against +0.68 vs v7.
 * `sigma_bp` (12 seeds): -0.06 vs bp1, +0.07 vs v7 - no better than plain `bp_auto`; off.
 * `leaf_bp: auto` (12 seeds): +0.02 vs bp1, +0.20 vs v7, slower - inconclusive; off.
+
+Ideas not yet tried (for later):
+
+* Finer strength bins at the top of the learned model (e.g. edges 0, .2, .4, .6, .8, .9,
+  .95, 1): "bets the river only with the nuts" is invisible to 5 equal bins. Needs the prior
+  rebuilt (calibrate.py / build_prior.py bin the same way as `model.interp_weights`).
+* Spend more of the time bank on big pots (a richer search level when the pot is large).
+* River abstraction by equity against opponent hand clusters (blockers / nut potential) for
+  the next blueprint; longer training on more cores.
