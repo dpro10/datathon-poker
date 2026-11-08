@@ -89,6 +89,7 @@ class HandTracker:
         self.bp = None                         # blueprint opponent model: weight bp_pi in the mixture
         self.bp_pi = 0.0
         self.bp_ws = (0.0, 0.0, 0.0, 0.0)      # ... per street (equal to bp_pi unless fitted per street)
+        self.ev_on = False                     # collect evidence for the blueprint weight this hand
         self.ev_pairs: list = []               # (street, P(action | blueprint), P(action | learned)) per opponent action
 
     # ----- candidates --------------------------------------------------------
@@ -361,7 +362,7 @@ class HandTracker:
         j = legal.index(a)
         pi = self._pi(st.street)
         node = self.node_now() if self.bp_pi > 0 else -1
-        if self.bp_pi > 0:
+        if self.ev_on:
             ev = self.evidence(st.street, cls, legal, j, node)
             if ev is not None:
                 self.ev_pairs.append((st.street,) + ev)

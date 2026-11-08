@@ -31,6 +31,40 @@ from game import (ERROR_LIMIT, TIME_BANK_SECONDS, Action, AgentConfig, Game,  # 
                   HandResult, Observation, button_for_deal, default_action, make_deal)
 
 _counter = itertools.count()
+# Variance reduction for experiments (HARNESS_ALLIN_EV=1): a hand that ends in an all-in before
+# the river is scored by its exact equity over the remaining board cards (sampled preflop)
+# instead of the one runout dealt. Unbiased for expected winnings; off = the judge's scoring.
+ALLIN_EV = os.environ.get("HARNESS_ALLIN_EV") == "1"
+
+
+def allin_nets(game, res):
+    """Expected nets of a hand that went all-in before the river (None if it did not)."""
+    from game import BOARD_CARDS_VISIBLE
+    if not res.went_to_showdown or not res.history:
+        return None
+    vis = BOARD_CARDS_VISIBLE[res.history[-1].street]
+    if vis >= 5:
+        return None
+    import numpy as np
+    from sdbot import evaluator as ev
+    holes = [sorted(int(c) for c in game.deal.hole_cards[s]) for s in (0, 1)]
+    board = [int(c) for c in game.deal.board[:vis]]
+    rest = np.array(sorted(set(range(36)) - set(holes[0]) - set(holes[1]) - set(board)), dtype=np.int64)
+    need = 5 - vis
+    if need == 5:
+        rng = np.random.default_rng(hash((game.hand_index, tuple(holes[0]), tuple(holes[1]))) & 0xFFFFFFFF)
+        extra = np.sort(np.argsort(rng.random((3000, len(rest))), axis=1)[:, :5], axis=1)
+        runs = rest[extra]
+    else:
+        idx = np.array(list(itertools.combinations(range(len(rest)), need)), dtype=np.int64)
+        runs = np.concatenate([np.tile(board, (len(idx), 1)), rest[idx]], axis=1)
+    tab = ev.board_tables(runs)
+    s0 = tab[ev.hand_codes_one(holes[0])].max(axis=0)
+    s1 = tab[ev.hand_codes_one(holes[1])].max(axis=0)
+    p0 = float(np.mean(s0 > s1) + 0.5 * np.mean(s0 == s1))
+    pot = game.pot
+    n0 = pot * p0 - game.contributed[0]
+    return (n0, -n0)
 # Testing on a busy machine: a bigger bank keeps the bots' time governors from reacting to
 # CPU contention, so strategy comparisons stay fair. Leave unset to mirror the judge.
 BANK = float(os.environ.get("HARNESS_BANK", TIME_BANK_SECONDS))
@@ -164,8 +198,10 @@ def play_half(path1: str, path2: str, seed, half: int, deals: int, serialize=Tru
             seat = game.to_act
             game.apply(bots[seat].act(game.observation(seat)))
         res = game.result()
-        nets[0].append(res.nets[0])
-        nets[1].append(res.nets[1])
+        adj = allin_nets(game, res) if ALLIN_EV else None
+        n0, n1 = adj if adj is not None else res.nets
+        nets[0].append(n0)
+        nets[1].append(n1)
         for seat in (0, 1):
             bots[seat].hand_end(game.hand_result(seat))
         if logs is not None:

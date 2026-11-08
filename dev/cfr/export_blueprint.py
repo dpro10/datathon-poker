@@ -27,4 +27,5 @@ def main(prefix, b0, b1, b2, b3, out=os.path.join(ROOT, "sdbot", "data", "bluepr
     print(f"wrote {out} ({os.path.getsize(out) / 1e6:.1f} MB), {ni} info sets, {reached:.1%} reached")
 
 if __name__ == "__main__":
-    main(sys.argv[1], *(int(x) for x in sys.argv[2:6]))
+    # python export_blueprint.py build/bp_a 128 128 128 64 [out.npz]
+    main(sys.argv[1], *(int(x) for x in sys.argv[2:6]), *sys.argv[6:7])

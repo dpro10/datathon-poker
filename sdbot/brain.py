@@ -10,7 +10,7 @@ import numpy as np
 from . import evaluator as ev
 from . import preflop as pf
 from .betting import CALL, FOLD, HALF, POT, PRE, RIVER, RULES, set_rules
-from .hand import COARSE, HandTracker
+from .hand import COARSE, MIX_MIN, HandTracker
 from .model import DecoupledModel, OpponentModel, classify
 from .search import DEFAULT_PARAMS, Search
 
@@ -229,11 +229,16 @@ def _choose(obs, memory: dict) -> int:
         h = HandTracker(obs, L["n_cand"], memory["rng"], L["flop_m"], model)
         h.tree_raises = L["tree_raises"]
         ws = bp_model_weights(memory)
-        if max(ws) > 0:
+        mix = max(ws) > MIX_MIN
+        # evidence for the weights: every hand at first or while the blueprint is in use;
+        # once it has been ruled out, every 4th hand keeps watching at a quarter of the cost
+        evid = bool(memory["params"].get("bp_auto")) and (
+            mix or memory.get("hands_done", 0) < 200 or obs.hand_index % 4 == 0)
+        if mix or evid:
             from . import blueprint
             h.bp = blueprint.get()
             if h.bp is not None:
-                h.bp_pi, h.bp_ws = max(ws), ws
+                h.bp_pi, h.bp_ws, h.ev_on = max(ws), ws, evid
         memory["hand"] = h
     h.sync(obs)
     if h.desync:
@@ -252,7 +257,8 @@ def _choose(obs, memory: dict) -> int:
     g_vecs, edges = (None, None)
     if params.get("leaf_bp") and st.street < RIVER:
         g_vecs, edges = _leaf_vectors(h, len(e))
-    s = Search(h.probs_fn(st.street), e, st, params, weakness(memory), g_vecs)
+    gw = h.bp_ws[st.street] if params.get("leaf_bp") == "auto" else None
+    s = Search(h.probs_fn(st.street), e, st, params, weakness(memory), g_vecs, gw)
     if g_vecs is not None:
         s.spr_edges = edges
     if h.bp_pi > 0:
@@ -407,7 +413,11 @@ def weakness(memory: dict) -> float:
     p = memory["params"]
     n = memory.get("hands_done", 0)
     wr = (memory.get("net_bb", 0.0) + p["sigma_n0"] * p["sigma_wr0"]) / (n + p["sigma_n0"])
-    return float(min(1.0, max(0.0, wr / p["sigma_full"])))
+    sigma = float(min(1.0, max(0.0, wr / p["sigma_full"])))
+    if p.get("sigma_bp") and p.get("bp_auto"):
+        # an opponent the blueprint predicts well is not weak, whatever the early results say
+        sigma *= 1.0 - float(np.mean(bp_model_weights(memory)))
+    return sigma
 
 
 def on_hand_end(result, memory: dict) -> None:
@@ -443,7 +453,7 @@ def _learn(result, memory: dict) -> None:
             recs.append({"cls": p["cls"], "act": FOLD, "street": p["street"], "pi": p["pi"]})
         elif result.went_to_showdown:
             recs.append({"cls": p["cls"], "act": CALL, "street": p["street"], "pi": p["pi"]})
-    if h.bp_pi > 0 and not h.desync:
+    if h.bp_pi > 0 and h.ev_on and not h.desync:
         pairs = list(h.ev_pairs)
         if p is not None and len(recs) > len(h.opp_recs):
             r = recs[-1]

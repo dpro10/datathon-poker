@@ -49,6 +49,7 @@ DEFAULT_PARAMS = {
     "sigma_wr0": 1.0,     # prior win rate (bb/hand) for the opponent-weakness estimate
     "sigma_n0": 100.0,    # ...and its weight in hands
     "sigma_full": 2.0,    # win rate (bb/hand) at which the leaf is fully "weak opponent"
+    "sigma_bp": False,    # scale that weakness by (1 - blueprint weight of the opponent model)
 }
 
 # Future-money curves per unit of min(spr, kappa), as a function of d = 2e - 1, for the
@@ -73,13 +74,19 @@ def future_curve(e: np.ndarray, street: int, sigma: float, even_c=None, weak_c=N
 
 
 class Search:
-    def __init__(self, probs_fn, e: np.ndarray, root: BState, params: dict, sigma: float = 0.0, g_vecs=None):
+    def __init__(self, probs_fn, e: np.ndarray, root: BState, params: dict, sigma: float = 0.0, g_vecs=None,
+                 g_weight=None):
         self.probs_fn = probs_fn
         self.e = e
         self.e_var = e * (1.0 - e)
         self.sigma = sigma
         self.g_vecs = g_vecs            # blueprint leaf: per-SPR-band vectors of value beyond equity (x pot)
-        if g_vecs is not None:
+        if g_vecs is not None and g_weight is not None:
+            # blueprint continuation values in proportion to how blueprint-like the opponent is
+            self.curve = (1.0 - g_weight) * future_curve(e, root.street + 1, sigma, params.get("leaf_even"),
+                                                         params.get("leaf_weak"))
+            self.g_scale = g_weight * params.get("leaf_bp_scale", 1.0)
+        elif g_vecs is not None:
             # equal-opponent part comes from the table; keep the weak-opponent curve's share
             self.curve = sigma * future_curve(e, root.street + 1, 1.0, params.get("leaf_even"), params.get("leaf_weak"))
             self.g_scale = (1.0 - sigma) * params.get("leaf_bp_scale", 1.0)
