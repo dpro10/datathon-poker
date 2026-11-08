@@ -174,3 +174,11 @@ Which blueprint should the model use? Seeds 57-72 (16 each, all-in EV):
 
 Each does slightly better against the solver it was built from (within noise). Over seeds
 1-16 and 57-72, v9 vs bp2 averages -0.10 (se ~0.06).
+| consensus (bp_a + bp_b averaged, `bp_extra`) | +0.09 | +0.04 | +0.13 (W1) |
+
+The consensus is best on average against the two solvers (+0.07; v9 -0.02, v9b +0.01) but
+weaker against v7 here, and costs ~25% more compute; more seeds are running.
+
+* `share_bins` 5 on v9: seeds 25-40 -0.04 vs bp1 / +0.24 vs v7 (v9: +0.01 / +0.32); pool
+  seeds 7-8 +5.53 (v9 +5.51) - no gain; off.
+* `share` 5 instead of 10: seeds 25-40 +0.01 vs bp1 / +0.29 vs v7 - same as 10; kept 10.
