@@ -29,6 +29,14 @@ Card abstraction (imperfect recall; the bot computes the same features live in `
 Training speed on 4 cores: about 330,000 iterations (two traversals each) per second; the
 first 100M iterations are discounted linearly, as in Pluribus.
 
+| Blueprint | Buckets (pre/flop/turn/river) | Info sets | Iterations | Pool | Where |
+| --- | --- | --- | --- | --- | --- |
+| bp_a | 128 / 128 / 128 / 64 | 1.31M | 1.29B (1 h) | 4M deals | `sdbot/data/blueprint.npz` |
+| bp_b | 256 / 256 / 256 / 96 | 2.26M | 2.29B (2.5 h, shared CPU) | 6M deals | `dev/cfr/blueprints/blueprint_b.npz` |
+
+Only the packed strategies are kept in git; the regret / strategy-sum files needed to resume
+training (`build/bp_*.regret.f32`, `.sum.f64`) are large and stay local.
+
 ## Using the blueprint in the bot
 
 * **Opponent model** (`bp_auto`, see `dev/RESULTS.md`): the search predicts the opponent's
