@@ -115,3 +115,6 @@ Experiments started before 05:35 used the v7 defaults unless their parameters sa
 * v8 + KL blend toward the blueprint (`blend_hi` 1, `blend_wr0` 0.5, `blend_n0` 100,
   `blend_full` 0.4), seeds 25-40: +0.21 vs v7 but -0.17 vs bp1 (2 losses in 16), and +3.88
   on the 8-bot subset (v8 +4.34) - rejected.
+* `rich` ({"n_cand": 900, "flop_m": 40}, pots of 16+ chips, slack 0.8) vs the v8 snapshot,
+  seeds 41-56, bank 16 to offset machine load: +0.06 (se 0.06); -0.03 vs bp1, -0.02 vs v7.
+  At most a small gain; off by default.
