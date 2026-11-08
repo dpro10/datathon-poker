@@ -27,6 +27,10 @@ DEFAULT_PARAMS = {
     "prior_strength": 6.0,  # pseudo-counts per (class, bin) for the opponent model prior (EM model)
     "act_strength": 8.0,    # decoupled model: pseudo-counts for P(action | class)
     "bin_strength": 2.0,    # decoupled model: pseudo-counts for P(strength bin | action, class)
+    "memory_hands": 0,      # effective memory of the opponent model in hands (0 = never forget)
+    "kl_kappa": 0.0,        # >0: blend the search with the CFR blueprint (temperature per chip of pot)
+    "kl_n0": 150.0,         # hands of evidence at which the temperature has halved
+    "kl_floor": 0.02,       # minimum prior weight for actions the blueprint never takes
     "sigma_wr0": 1.0,     # prior win rate (bb/hand) for the opponent-weakness estimate
     "sigma_n0": 100.0,    # ...and its weight in hands
     "sigma_full": 2.0,    # win rate (bb/hand) at which the leaf is fully "weak opponent"

@@ -216,14 +216,83 @@ def _choose(obs, memory: dict) -> int:
         memory["desyncs"] = memory.get("desyncs", 0) + 1
         return fallback(obs)
     st = h.st
+    if memory["params"].get("mode") == "blueprint":
+        a = _blueprint_action(h, memory)
+        if a is not None:
+            h.note_my_action(a)
+            return a
     e, u, w = h.range_now(st.street)
     params = memory["params"]
     if h.tree_raises != params.get("tree_raises", 2):
         params = dict(params, tree_raises=h.tree_raises)
     s = Search(h.probs_fn(st.street), e, st, params, weakness(memory))
     _, _, a, evs = s.ours(st, w)
+    if params.get("kl_kappa", 0) > 0:
+        a2 = _kl_choice(h, memory, evs)
+        if a2 is not None:
+            a = a2
     h.note_my_action(a)
     return a
+
+
+def _blueprint_probs(h):
+    """Blueprint probabilities over the 4 actions at the current node, or None."""
+    from . import blueprint
+    bp = blueprint.get()
+    if bp is None:
+        return None
+    st = h.st
+    node = bp.node(h.actions)
+    if node < 0 or int(bp.street[node]) != st.street:
+        return None
+    if st.street == PRE:
+        b = bp.bucket(0, my_cls=h.my_cls)
+    else:
+        b = bp.bucket(st.street, my_hs=h.street_data(st.street).my_hs)
+    return bp.probs(node, b)
+
+
+def _kl_choice(h, memory: dict, evs: dict):
+    """Exploit only as far as the evidence justifies: sample from
+        pi(a) ~ blueprint(a) * exp(EV(a) / tau),
+    the strategy that maximizes EV minus tau * KL(pi || blueprint). tau scales with the pot
+    and shrinks as we observe the opponent, so we start near equilibrium and move toward the
+    search's best response once the opponent's tendencies are established."""
+    p_bp = _blueprint_probs(h)
+    if p_bp is None:
+        return None
+    p = memory["params"]
+    legal = list(evs.keys())
+    n = memory.get("hands_done", 0)
+    tau = p["kl_kappa"] * max(h.st.pot, 2) * p["kl_n0"] / (p["kl_n0"] + n)
+    tau = max(tau, 1e-6)
+    prior = np.array([p_bp[a] for a in legal]) + p.get("kl_floor", 0.02)
+    ev = np.array([evs[a] for a in legal])
+    logit = np.log(prior / prior.sum()) + (ev - ev.max()) / tau
+    q = np.exp(logit - logit.max())
+    q /= q.sum()
+    return int(legal[int(memory["rng"].choice(len(legal), p=q))])
+
+
+def _blueprint_action(h, memory: dict):
+    """Play the CFR blueprint: sample from its strategy at this node for our bucket."""
+    from . import blueprint
+    bp = blueprint.get()
+    if bp is None:
+        return None
+    st = h.st
+    node = bp.node(h.actions)
+    if node < 0 or int(bp.street[node]) != st.street:
+        return None
+    if st.street == PRE:
+        b = bp.bucket(0, my_cls=h.my_cls)
+    else:
+        b = bp.bucket(st.street, my_hs=h.street_data(st.street).my_hs)
+    p = bp.probs(node, b)
+    if p is None:
+        return None
+    a = int(memory["rng"].choice(4, p=p))
+    return a if a in st.legal() else None
 
 
 def weakness(memory: dict) -> float:
@@ -268,6 +337,9 @@ def _learn(result, memory: dict) -> None:
             recs.append({"cls": p["cls"], "act": FOLD, "street": p["street"], "pi": p["pi"]})
         elif result.went_to_showdown:
             recs.append({"cls": p["cls"], "act": CALL, "street": p["street"], "pi": p["pi"]})
+    w = memory["params"].get("memory_hands", 0)
+    if w and hasattr(model, "decay"):
+        model.decay(1.0 - 1.0 / float(w))
     if result.opp_hole is not None and not h.desync:
         opp = [int(c) for c in result.opp_hole]
         h.board = [int(c) for c in result.board]

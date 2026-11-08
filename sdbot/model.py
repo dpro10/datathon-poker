@@ -191,6 +191,20 @@ class DecoupledModel(OpponentModel):
         shape = pri * pb[None, :, None]                         # (C, B, A) ~ P(b, a)
         shape = shape / np.maximum(shape.sum(axis=1, keepdims=True), 1e-12)   # P(b | a)
         self.binc = np.transpose(shape, (0, 2, 1)) * bin_strength              # (C, A, B)
+        # prior pseudo-counts stay fixed; observed counts can fade (see decay)
+        self.act0, self.binc0 = self.act.copy(), self.binc.copy()
+        self.act_d = np.zeros_like(self.act)
+        self.binc_d = np.zeros_like(self.binc)
+
+    def decay(self, gamma: float) -> None:
+        """Fade old observations (gamma < 1 per hand), so a change of style is re-learned."""
+        if gamma >= 1.0:
+            return
+        self.act_d *= gamma
+        self.binc_d *= gamma
+        self.act = self.act0 + self.act_d
+        self.binc = self.binc0 + self.binc_d
+        self._cache_probs = None
 
     def probs(self) -> np.ndarray:
         if self._cache_probs is None:
@@ -204,13 +218,16 @@ class DecoupledModel(OpponentModel):
 
     def observe_known(self, cls: int, action: int, u: float, weight: float = 1.0):
         lo, wl, wh = interp_weights(np.array([u]))
-        self.act[cls, action] += weight
-        self.binc[cls, action, lo[0]] += weight * wl[0]
-        self.binc[cls, action, lo[0] + 1] += weight * wh[0]
+        for arr in (self.act, self.act_d):
+            arr[cls, action] += weight
+        for arr in (self.binc, self.binc_d):
+            arr[cls, action, lo[0]] += weight * wl[0]
+            arr[cls, action, lo[0] + 1] += weight * wh[0]
         self.n_obs[cls] += weight
         self._cache_probs = None
 
     def observe_soft(self, cls: int, action: int, pi: np.ndarray, weight: float = 1.0):
         self.act[cls, action] += weight
+        self.act_d[cls, action] += weight
         self.n_obs[cls] += weight
         self._cache_probs = None

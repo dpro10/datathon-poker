@@ -55,7 +55,7 @@ def cards_not_in(mask: int) -> np.ndarray:
 
 class StreetData:
     __slots__ = ("street", "idx", "e", "evr", "u", "tables", "rmask", "cdf", "cnt", "nvalid", "evr_sorted",
-                 "my_evr", "my_u", "K", "M", "probs", "coarse", "NO")
+                 "my_evr", "my_u", "K", "M", "probs", "coarse", "NO", "my_hs")
 
 
 class HandTracker:
@@ -80,6 +80,7 @@ class HandTracker:
         self.sd: dict[int, StreetData] = {}
         self.board: list[int] = []
         self.opp_recs: list[dict] = []
+        self.actions: list[int] = []           # every action of the hand, in order (for the blueprint)
         self.pending = None
         self.desync = False
         self.pre_probs: dict = {}
@@ -135,7 +136,10 @@ class HandTracker:
         valid = (self.cmask[idx][:, None] & rmask[None, :]) == 0  # (K, M)
         nv = np.maximum(valid.sum(axis=1), 1)
         win2 = (ms > cs).astype(np.int16) * 2 + (ms == cs)      # 2 = win, 1 = tie
-        e = (win2 * valid).sum(axis=1) / (2.0 * nv)
+        wv = win2 * valid
+        e = wv.sum(axis=1) / (2.0 * nv)
+        # our strength on every runout: percentile among the (uniform) candidate population
+        my_hs = wv.sum(axis=0) / (2.0 * np.maximum(valid.sum(axis=0), 1))
         # rank every candidate among the valid candidates on each runout via histograms
         coarse = street != RIVER
         NO = NO_COARSE if coarse else NO_EXACT
@@ -159,7 +163,7 @@ class HandTracker:
         d = StreetData()
         d.street, d.idx, d.e, d.evr, d.u, d.tables, d.rmask = street, idx, e, evr, u, tables, rmask
         d.cdf, d.cnt, d.nvalid, d.evr_sorted, d.K, d.M = cdf, cnt, nvalid, np.sort(evr), K, M
-        d.coarse, d.NO, d.my_evr = coarse, NO, my_evr
+        d.coarse, d.NO, d.my_evr, d.my_hs = coarse, NO, my_evr, my_hs
         d.my_u = float(np.searchsorted(d.evr_sorted, my_evr) / max(K, 1))
         d.probs = {}
         self.sd[street] = d
@@ -237,6 +241,7 @@ class HandTracker:
             a = int(rec.action)
             if seat == 1:
                 self._opp_action(a)
+            self.actions.append(a)
             added = st.apply(a)
             if added != rec.amount:
                 self.desync = True

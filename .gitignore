@@ -8,3 +8,5 @@ ladder_data/
 dev/versions/
 dev/results/
 *.log
+dev/cfr/build/
+dev/cfr/solver
