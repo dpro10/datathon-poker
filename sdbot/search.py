@@ -37,6 +37,13 @@ DEFAULT_PARAMS = {
     "blend_n0": 50.0,       # ... worth this many hands
     "blend_full": 0.5,      # win rate (bb/hand) at which we fully trust the search
     "bp_streets": (),       # streets (0 = preflop ...) on which to play the blueprint outright
+    "bp_model": 0.0,        # weight of the CFR blueprint in the opponent model (per candidate hand and node)
+    "bp_auto": False,       # ... or fit that weight to the opponent (posterior mean over a grid)
+    "bp_model0": 0.5,       # automatic weight before any evidence
+    "bp_temp": 1.0,         # log-likelihoods are divided by this (>1 = slower to commit)
+    "bp_streetwise": False,  # fit the weight separately on each street
+    "bp_lo": 0.02,          # clip of the automatic weight
+    "bp_hi": 0.98,
     "leaf_bp": False,       # street-end leaves from blueprint self-play (data/leaf_bp.npz)
     "leaf_bp_scale": 1.0,
     "sigma_wr0": 1.0,     # prior win rate (bb/hand) for the opponent-weakness estimate
@@ -84,6 +91,8 @@ class Search:
         self.p = params
         self.max_raises = params.get("tree_raises", 2)
         self.nodes = 0
+        self.child = None               # blueprint tree (bp.child) when the opponent model needs nodes
+        self.root_node = -1
 
     def leaf(self, st: BState):
         P = st.pot
@@ -98,7 +107,7 @@ class Search:
             v = v + (P * self.g_scale) * self.g_vecs[band]
         return v
 
-    def value(self, st: BState, w: np.ndarray):
+    def value(self, st: BState, w: np.ndarray, node: int = -1):
         self.nodes += 1
         if st.over:
             inv = st.contrib[0] - self.root_contrib
@@ -110,10 +119,15 @@ class Search:
         if st.street != self.root_street:
             return self.leaf(st) - (st.contrib[0] - self.root_contrib)
         if st.to_act == 0:
-            return self.ours(st, w, root=False)[0]
-        return self.theirs(st, w)
+            return self.ours(st, w, root=False, node=node)[0]
+        return self.theirs(st, w, node)
 
-    def ours(self, st: BState, w: np.ndarray, root: bool = True):
+    def _next(self, node: int, a: int) -> int:
+        return int(self.child[node, a]) if node >= 0 else -1
+
+    def ours(self, st: BState, w: np.ndarray, root: bool = True, node: int | None = None):
+        if node is None:
+            node = self.root_node
         legal = st.legal()
         if st.raises - self.root_raises >= self.max_raises:
             legal = tuple(a for a in legal if a <= CALL)
@@ -129,17 +143,17 @@ class Search:
             else:
                 ch = st.copy()
                 ch.apply(a)
-                v = self.value(ch, w)
+                v = self.value(ch, w, self._next(node, a))
             ev = float(np.dot(w, v)) / sw if isinstance(v, np.ndarray) else float(v)
             evs[a] = ev
             if ev > best_ev:
                 best_v, best_ev, best_a = v, ev, a
         return best_v, best_ev, best_a, evs
 
-    def theirs(self, st: BState, w: np.ndarray):
+    def theirs(self, st: BState, w: np.ndarray, node: int = -1):
         legal = st.legal()
         cls = classify(st)
-        P = self.probs_fn(cls, legal)
+        P = self.probs_fn(cls, legal, node)
         if st.raises - self.root_raises >= self.max_raises and len(legal) > 2:
             # beyond the explored depth, a raise is treated as a call
             n = 2 if legal[0] == FOLD else 1
@@ -154,5 +168,5 @@ class Search:
                 continue
             ch = st.copy()
             ch.apply(a)
-            total = total + p * self.value(ch, w * p)
+            total = total + p * self.value(ch, w * p, self._next(node, a))
         return total

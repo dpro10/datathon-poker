@@ -34,6 +34,8 @@ class Blueprint:
         self.pre = d["pre"].astype(np.int64)
         self.cflop = d["cflop"].astype(np.float64)
         self.cturn = d["cturn"].astype(np.float64)
+        self._pre_M = None
+        self._pre_cache: dict = {}
 
     def node(self, actions) -> int:
         n = 0
@@ -52,6 +54,30 @@ class Blueprint:
         C = self.cflop if street == 1 else self.cturn
         return int(((C - h[None, :]) ** 2).sum(axis=1).argmin())
 
+    def rows(self, node: int, buckets: np.ndarray, legal) -> np.ndarray:
+        """(K, len(legal)) probabilities of the legal actions at `node` for hands in `buckets`
+        (the acting player's); uniform where the info set was never trained."""
+        raw = self.strat[self.offset[node] + buckets]
+        r = raw[:, list(legal)].astype(np.float64)
+        bad = (raw.astype(np.int64).sum(axis=1) >= 1020) | (r.sum(axis=1) <= 0)
+        r[bad] = 1.0
+        return r / r.sum(axis=1, keepdims=True)
+
+    def pre_bin_rows(self, node: int, legal) -> np.ndarray:
+        """(NB, len(legal)) preflop action probabilities averaged over the hands in each
+        strength-percentile bin (the search's preflop range representation)."""
+        key = (node, tuple(legal))
+        c = self._pre_cache.get(key)
+        if c is None:
+            if self._pre_M is None:
+                binj = np.minimum((pf.PCT * pf.NB).astype(np.int64), pf.NB - 1)
+                M = np.zeros((pf.NB, self.B[0]))
+                np.add.at(M, (binj, self.pre), pf._DATA["counts"].astype(np.float64))
+                self._pre_M = M / M.sum(axis=1, keepdims=True)
+            c = self._pre_M @ self.rows(node, np.arange(self.B[0]), legal)
+            self._pre_cache[key] = c
+        return c
+
     def probs(self, node: int, bucket: int):
         """Probabilities over (FOLD, CALL, HALF, POT), or None if the info set was never trained."""
         if node < 0 or self.offset[node] < 0:
@@ -68,8 +94,16 @@ class Blueprint:
 _BP = None
 
 
+def compatible() -> bool:
+    """The blueprint's betting tree assumes the datathon settings (blinds 1/2, 80 chips, 4 raises)."""
+    from .betting import RULES
+    return (RULES["sb"], RULES["bb"], RULES["stack"], RULES["cap"]) == (1, 2, 80, 4)
+
+
 def get() -> Blueprint | None:
     global _BP
+    if not compatible():
+        return None
     if _BP is None and os.path.exists(_PATH):
         try:
             _BP = Blueprint()

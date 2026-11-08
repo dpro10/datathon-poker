@@ -73,6 +73,24 @@ BENCH_REF = 0.0060    # seconds for the benchmark above on the reference machine
 SPEED = float(os.environ["SDBOT_SPEED"]) if os.environ.get("SDBOT_SPEED") else _speed_ratio()  # env: tests only
 
 
+def _preload() -> None:
+    """Load the blueprint while the server starts (free) rather than in the first request
+    (charged to the time bank)."""
+    p = dict(DEFAULT_PARAMS, **PARAM_OVERRIDES)
+    if p.get("bp_auto") or p.get("bp_model", 0) or p.get("mode") == "blueprint" or p.get("bp_streets") \
+            or p.get("kl_kappa", 0) or p.get("blend_hi", 0):
+        try:
+            from . import blueprint
+            bp = blueprint.get()
+            if bp is not None:
+                bp.pre_bin_rows(0, (CALL,))     # builds the preflop bin weights
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_preload()
+
+
 def new_half(config, memory: dict) -> None:
     params = dict(DEFAULT_PARAMS, **PARAM_OVERRIDES)
     try:
@@ -210,6 +228,12 @@ def _choose(obs, memory: dict) -> int:
             L = dict(L, **memory["params"]["l0"])
         h = HandTracker(obs, L["n_cand"], memory["rng"], L["flop_m"], model)
         h.tree_raises = L["tree_raises"]
+        ws = bp_model_weights(memory)
+        if max(ws) > 0:
+            from . import blueprint
+            h.bp = blueprint.get()
+            if h.bp is not None:
+                h.bp_pi, h.bp_ws = max(ws), ws
         memory["hand"] = h
     h.sync(obs)
     if h.desync:
@@ -231,6 +255,8 @@ def _choose(obs, memory: dict) -> int:
     s = Search(h.probs_fn(st.street), e, st, params, weakness(memory), g_vecs)
     if g_vecs is not None:
         s.spr_edges = edges
+    if h.bp_pi > 0:
+        s.child, s.root_node = h.bp.child, h.node_now()
     _, _, a, evs = s.ours(st, w)
     if params.get("kl_kappa", 0) > 0 or params.get("blend_hi", 0) > 0:
         a2 = _kl_choice(h, memory, evs)
@@ -335,6 +361,46 @@ def _blueprint_action(h, memory: dict):
     return a if a in st.legal() else None
 
 
+def bp_model_weights(memory: dict) -> tuple:
+    """Weight of the blueprint in the opponent model on each street (0 = the learned class
+    model only). With bp_auto: the posterior mean of the weight w of the mixture
+    w * blueprint + (1 - w) * learned, from how well each w predicted every action so far
+    (one weight for the whole hand, or one per street with bp_streetwise)."""
+    p = memory["params"]
+    if not p.get("bp_auto"):
+        w = float(p.get("bp_model", 0.0))
+        return (w, w, w, w)
+    ll = memory.get("pi_ll")                                 # (4, grid) log-likelihoods
+    if ll is None:
+        w = float(p.get("bp_model0", 0.5))
+        return (w, w, w, w)
+    if not p.get("bp_streetwise"):
+        ll = np.broadcast_to(ll.sum(axis=0), ll.shape)
+    post = np.exp((ll - ll.max(axis=1, keepdims=True)) / float(p.get("bp_temp", 1.0)))
+    w = post @ PI_GRID / post.sum(axis=1)
+    w = np.clip(w, p.get("bp_lo", 0.02), p.get("bp_hi", 0.98))
+    return tuple(float(x) for x in w)
+
+
+def bp_model_weight(memory: dict) -> float:
+    """The overall blueprint weight (for reports)."""
+    return max(bp_model_weights(memory))
+
+
+PI_GRID = np.linspace(0.0, 1.0, 21)
+
+
+def _note_evidence(memory: dict, pairs) -> None:
+    """Add the log-likelihood of every grid weight, per street."""
+    if not pairs:
+        return
+    a = np.asarray(pairs)                                   # (n, 3): street, P(blueprint), P(learned)
+    lik = np.log(PI_GRID[None, :] * a[:, 1:2] + (1.0 - PI_GRID[None, :]) * a[:, 2:3])
+    ll = np.zeros((4, len(PI_GRID)))
+    np.add.at(ll, a[:, 0].astype(np.int64), lik)
+    memory["pi_ll"] = ll if memory.get("pi_ll") is None else memory["pi_ll"] + ll
+
+
 def weakness(memory: dict) -> float:
     """How exploitable the opponent looks (0 = our equal, 1 = much weaker), from our
     win rate this half shrunk toward a prior."""
@@ -377,6 +443,16 @@ def _learn(result, memory: dict) -> None:
             recs.append({"cls": p["cls"], "act": FOLD, "street": p["street"], "pi": p["pi"]})
         elif result.went_to_showdown:
             recs.append({"cls": p["cls"], "act": CALL, "street": p["street"], "pi": p["pi"]})
+    if h.bp_pi > 0 and not h.desync:
+        pairs = list(h.ev_pairs)
+        if p is not None and len(recs) > len(h.opp_recs):
+            r = recs[-1]
+            legal = p["state"].legal()
+            if r["act"] in legal:
+                ev = h.evidence(r["street"], r["cls"], legal, legal.index(r["act"]), p.get("node", -1))
+                if ev is not None:
+                    pairs.append((r["street"],) + ev)
+        _note_evidence(memory, pairs)
     w = memory["params"].get("memory_hands", 0)
     if w and hasattr(model, "decay"):
         model.decay(1.0 - 1.0 / float(w))

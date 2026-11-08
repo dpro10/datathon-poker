@@ -36,6 +36,7 @@ ALL36 = np.arange(36, dtype=np.uint64)
 COARSE = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "coarse.npy")).astype(np.int64)
 NO_COARSE = int(COARSE.max()) + 2
 NO_EXACT = ev.NUM_ORD + 2
+MIX_MIN = 0.05          # blueprint weights at or below this are treated as 0 in the opponent model
 
 
 def bitmask_rows(cards: np.ndarray) -> np.ndarray:
@@ -55,7 +56,8 @@ def cards_not_in(mask: int) -> np.ndarray:
 
 class StreetData:
     __slots__ = ("street", "idx", "e", "evr", "u", "tables", "rmask", "cdf", "cnt", "nvalid", "evr_sorted",
-                 "my_evr", "my_u", "K", "M", "probs", "coarse", "NO", "my_hs", "rank", "valid", "groups")
+                 "my_evr", "my_u", "K", "M", "probs", "coarse", "NO", "my_hs", "rank", "valid", "groups",
+                 "buckets")
 
 
 class HandTracker:
@@ -84,6 +86,10 @@ class HandTracker:
         self.pending = None
         self.desync = False
         self.pre_probs: dict = {}
+        self.bp = None                         # blueprint opponent model: weight bp_pi in the mixture
+        self.bp_pi = 0.0
+        self.bp_ws = (0.0, 0.0, 0.0, 0.0)      # ... per street (equal to bp_pi unless fitted per street)
+        self.ev_pairs: list = []               # (street, P(action | blueprint), P(action | learned)) per opponent action
 
     # ----- candidates --------------------------------------------------------
 
@@ -96,10 +102,50 @@ class HandTracker:
         self.cmask = bitmask_rows(self.cand)
         ci = pf.colex(self.cand)
         self.ccodes = pf.CODES_OF_HAND[ci].astype(np.intp)
-        self.cpre = pf.PCT[pf.CLS_OF_HAND[ci]]
+        self.ccls = pf.CLS_OF_HAND[ci].astype(np.int64)
+        self.cpre = pf.PCT[self.ccls]
         self.logw = np.zeros(self.n_cand)
-        for cls, legal, j in self.pre_recs:
-            self.logw += np.log(self.model.action_probs(cls, self.cpre, legal)[:, j])
+        for cls, legal, j, node in self.pre_recs:
+            self.logw += np.log(self._cand_pre_probs(cls, legal, node)[:, j])
+
+    def mixing(self, street: int) -> bool:
+        """Is the blueprint part of the opponent model on this street? (Below MIX_MIN it is
+        left out: the learned model alone, at the cost of plain v7.)"""
+        return self.bp_ws[street] > MIX_MIN
+
+    def _cand_pre_probs(self, cls: int, legal, node: int) -> np.ndarray:
+        P = self.model.action_probs(cls, self.cpre, legal)
+        if node >= 0 and self.mixing(PRE):
+            P = self._mix(P, self.bp.rows(node, self.bp.pre[self.ccls], legal), PRE)
+        return P
+
+    def _mix(self, Pc: np.ndarray, Pb: np.ndarray, street: int) -> np.ndarray:
+        wb = self.bp_ws[street]
+        P = wb * np.maximum(Pb, 1e-3) + (1.0 - wb) * Pc
+        return P / P.sum(axis=1, keepdims=True)
+
+    def evidence(self, street: int, cls: int, legal, j: int, node: int):
+        """(P(action | blueprint), P(action | learned model)), both averaged over our current
+        belief about the opponent's hand; None without a blueprint node."""
+        if node < 0:
+            return None
+        if street == PRE:
+            w = np.exp(self.blogw - self.blogw.max())
+            pc = self.model.action_probs(cls, pf.BIN_CENTERS, legal)[:, j]
+            pb = self.bp.pre_bin_rows(node, legal)[:, j]
+        else:
+            d = self.street_data(street)
+            lw = self.logw[d.idx]
+            w = np.exp(lw - lw.max())
+            pc = self.model.action_probs(cls, d.u, legal)[:, j]
+            pb = self.bp.rows(node, self.candidate_buckets(street), legal)[:, j]
+        sw = w.sum()
+        lc = float(np.dot(w, pc)) / sw
+        lb = float(np.dot(w, np.maximum(pb, 1e-3))) / sw
+        return max(lb, 1e-6), max(lc, 1e-6)
+
+    def node_now(self) -> int:
+        return self.bp.node(self.actions) if self.bp is not None else -1
 
     # ----- street data -------------------------------------------------------
 
@@ -164,25 +210,45 @@ class HandTracker:
         d.street, d.idx, d.e, d.evr, d.u, d.tables, d.rmask = street, idx, e, evr, u, tables, rmask
         d.cdf, d.cnt, d.nvalid, d.evr_sorted, d.K, d.M = cdf, cnt, nvalid, np.sort(evr), K, M
         d.coarse, d.NO, d.my_evr, d.my_hs = coarse, NO, my_evr, my_hs
-        d.rank, d.valid, d.groups = rank, valid, None
+        d.rank, d.valid, d.groups, d.buckets = rank, valid, None, None
         d.my_u = float(np.searchsorted(d.evr_sorted, my_evr) / max(K, 1))
         d.probs = {}
         self.sd[street] = d
         return d
+
+    @staticmethod
+    def _strength_hist(d: StreetData) -> np.ndarray:
+        """(K, 8) histogram of each candidate's final strength over this street's runouts."""
+        idx = np.minimum((d.rank * 8).astype(np.int64), 7) + 8 * np.arange(d.K, dtype=np.int64)[:, None]
+        hist = np.bincount(idx[d.valid], minlength=8 * d.K).reshape(d.K, 8).astype(np.float64)
+        return hist / np.maximum(hist.sum(axis=1, keepdims=True), 1)
 
     def candidate_groups(self, street: int, centroids: np.ndarray, grp: np.ndarray) -> np.ndarray:
         """Hand-type group of every alive candidate on a flop/turn street (blueprint buckets,
         from each candidate's strength histogram over this street's runouts)."""
         d = self.street_data(street)
         if d.groups is None:
-            idx = np.minimum((d.rank * 8).astype(np.int64), 7)          # (K, M)
-            hist = np.zeros((d.K, 8))
-            rows = np.repeat(np.arange(d.K), d.M)
-            np.add.at(hist, (rows, idx.ravel()), d.valid.ravel())
-            hist /= np.maximum(hist.sum(axis=1, keepdims=True), 1)
+            hist = self._strength_hist(d)
             dist = (hist ** 2).sum(1)[:, None] - 2 * hist @ centroids.T + (centroids ** 2).sum(1)[None, :]
             d.groups = grp[dist.argmin(axis=1)]
         return d.groups
+
+    def candidate_buckets(self, street: int) -> np.ndarray:
+        """Blueprint bucket of every alive candidate on a postflop street (same features as
+        our own bucket: strength histogram over runouts on the flop/turn, strength on the river)."""
+        d = self.street_data(street)
+        b = getattr(d, "buckets", None)
+        if b is None:
+            bp = self.bp
+            if street == RIVER:
+                b = np.minimum((d.evr * bp.B[3]).astype(np.int64), bp.B[3] - 1)
+            else:
+                C = bp.cflop if street == FLOP else bp.cturn
+                hist = self._strength_hist(d)
+                dist = (C ** 2).sum(1)[None, :] - 2 * hist @ C.T          # + |hist|^2, same for every bucket
+                b = dist.argmin(axis=1).astype(np.int64)
+            d.buckets = b
+        return b
 
     def strength_of(self, hand, street: int) -> float:
         """Percentile u of an arbitrary hand (e.g. the opponent's at showdown) on a street."""
@@ -216,7 +282,25 @@ class HandTracker:
             d = self.street_data(street)
             cache, u = d.probs, d.u
 
-        def f(cls, legal):
+        if self.mixing(street):
+            bp, B = self.bp, (None if street == PRE else self.candidate_buckets(street))
+
+            def g(cls, legal, node=-1):
+                key = (cls, legal, node)
+                P = cache.get(key)
+                if P is None:
+                    P = cache.get((cls, legal))
+                    if P is None:
+                        P = model.action_probs(cls, u, legal)
+                        cache[(cls, legal)] = P
+                    if node >= 0:
+                        P = self._mix(P, bp.pre_bin_rows(node, legal) if B is None else bp.rows(node, B, legal),
+                                      street)
+                    cache[key] = P
+                return P
+            return g
+
+        def f(cls, legal, node=-1):
             key = (cls, legal)
             P = cache.get(key)
             if P is None:
@@ -276,14 +360,19 @@ class HandTracker:
             return
         j = legal.index(a)
         pi = self._pi(st.street)
+        node = self.node_now() if self.bp_pi > 0 else -1
+        if self.bp_pi > 0:
+            ev = self.evidence(st.street, cls, legal, j, node)
+            if ev is not None:
+                self.ev_pairs.append((st.street,) + ev)
         if st.street == PRE:
-            self.blogw += np.log(self.probs_fn(PRE)(cls, legal)[:, j])
-            self.pre_recs.append((cls, legal, j))
+            self.blogw += np.log(self.probs_fn(PRE)(cls, legal, node)[:, j])
+            self.pre_recs.append((cls, legal, j, node))
             if self.cand is not None:
-                self.logw += np.log(self.model.action_probs(cls, self.cpre, legal)[:, j])
+                self.logw += np.log(self._cand_pre_probs(cls, legal, node)[:, j])
         else:
             d = self.street_data(st.street)
-            self.logw[d.idx] += np.log(self.probs_fn(st.street)(cls, legal)[:, j])
+            self.logw[d.idx] += np.log(self.probs_fn(st.street)(cls, legal, node)[:, j])
         self.opp_recs.append({"cls": cls, "act": a, "street": st.street, "pi": pi})
 
     def note_my_action(self, a: int) -> None:
@@ -294,5 +383,7 @@ class HandTracker:
         self.pending = None
         if st.over or st.to_act != 1 or st.street != self.st.street:
             return
+        n = self.node_now() if self.bp_pi > 0 else -1
         self.pending = {"cls": classify(st), "street": st.street, "pi": self._pi(st.street),
-                        "state": st, "facing": st.to_call(1) > 0}
+                        "state": st, "facing": st.to_call(1) > 0,
+                        "node": int(self.bp.child[n, a]) if n >= 0 else -1}
