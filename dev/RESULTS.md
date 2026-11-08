@@ -147,3 +147,20 @@ Became the default; snapshot `v9`. Official tests, changed-rules test and bluepr
   passed; `dev/docker_match.sh` vs the calling station (seed 7, solver training on all 4
   cores): charged 4.29 s / 5.47 s of the 8 s bank, 0 errors, +14.07. To re-measure on a
   quiet machine.
+
+## Second blueprint and generalization (07:10-07:40 UTC)
+
+bp_b (256/256/256/96 buckets, 2.29B iterations) as opponent `bp2` (pure blueprint):
+
+| Test | Result (bb/deal, all-in EV) |
+| --- | --- |
+| bp2 vs bp1, 24 seeds | +0.02 (se 0.05): the finer abstraction is not measurably stronger |
+| v7 vs bp2, 16 seeds | -0.41, W0 C10 L6 (vs bp1: -0.26) |
+| v9 (bp_a model) vs bp2, 16 seeds | -0.17, W1 C14 L1 |
+
+v9 fixes most of v7's leak against a CFR bot it was not built from, but not all of it.
+Next: v9 with bp_b as its model, and with both blueprints averaged (`bp_extra`).
+
+* `cp_detect` (h 15) on v9 vs the switching bots (seeds 1-4): switcher +2.45 / fast +2.80,
+  against +2.71 / +3.02 without it - rejected. v9's gap to the pure styles' average
+  (nit +1.49, maniac +5.59) is about -0.8 (v7 about -1.2).

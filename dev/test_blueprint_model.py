@@ -73,7 +73,7 @@ for trial in range(30):
     o = Obs()
     o.hole_cards, o.hand_index, o.is_button = [int(c) for c in deck[:5]], trial, bool(trial % 2)
     h = HandTracker(o, 400, rs, 16, model)
-    h.bp, h.bp_pi, h.bp_ws = bp, 0.6, (0.6, 0.6, 0.6, 0.6)
+    h.bp, h.bp_pi, h.bp_ws, h.bps = bp, 0.6, (0.6, 0.6, 0.6, 0.6), [bp]
     st = BState(o.is_button)
     # play a short random line: preflop calls, then the flop
     while st.street == PRE and not st.over:

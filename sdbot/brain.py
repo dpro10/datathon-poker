@@ -84,6 +84,10 @@ def _preload() -> None:
             bp = blueprint.get()
             if bp is not None:
                 bp.pre_bin_rows(0, (CALL,))     # builds the preflop bin weights
+            if p.get("bp_extra"):
+                bx = blueprint.get_extra(p["bp_extra"])
+                if bx is not None:
+                    bx.pre_bin_rows(0, (CALL,))
         except Exception:  # noqa: BLE001
             pass
 
@@ -270,6 +274,12 @@ def _choose(obs, memory: dict) -> int:
             h.bp = blueprint.get()
             if h.bp is not None:
                 h.bp_pi, h.bp_ws, h.ev_on = max(ws), ws, evid
+                h.bps = [h.bp]
+                extra = memory["params"].get("bp_extra")
+                if extra:
+                    bx = blueprint.get_extra(extra)
+                    if bx is not None:
+                        h.bps.append(bx)
                 h.bp_smooth = bool(memory["params"].get("bp_river_smooth"))
         memory["hand"] = h
     h.sync(obs)

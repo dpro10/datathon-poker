@@ -101,6 +101,29 @@ class Blueprint:
 _BP = None
 
 
+_EXTRA: dict = {}
+
+
+def get_extra(path: str) -> Blueprint | None:
+    """A second blueprint (same betting tree, other card abstraction) whose predictions are
+    averaged with the main one's in the opponent model; None if missing or incompatible."""
+    main = get()
+    if main is None:
+        return None
+    if path not in _EXTRA:
+        bp = None
+        try:
+            full = path if os.path.isabs(path) else os.path.join(os.path.dirname(_PATH), path)
+            if os.path.exists(full):
+                bp = Blueprint(full)
+                if bp.child.shape != main.child.shape or not np.array_equal(bp.child, main.child):
+                    bp = None
+        except Exception:  # noqa: BLE001
+            bp = None
+        _EXTRA[path] = bp
+    return _EXTRA[path]
+
+
 def compatible() -> bool:
     """The blueprint's betting tree assumes the datathon settings (blinds 1/2, 80 chips, 4 raises)."""
     from .betting import RULES

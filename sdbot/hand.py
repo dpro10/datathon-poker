@@ -88,6 +88,7 @@ class HandTracker:
         self.pre_probs: dict = {}
         self.rich = None                       # (min pot, n_cand, flop runouts) for big pots, if affordable
         self.bp = None                         # blueprint opponent model: weight bp_pi in the mixture
+        self.bps: list = []                    # all blueprints in the model (bps[0] = bp); their predictions are averaged
         self.bp_pi = 0.0
         self.bp_ws = (0.0, 0.0, 0.0, 0.0)      # ... per street (equal to bp_pi unless fitted per street)
         self.ev_on = False                     # collect evidence for the blueprint weight this hand
@@ -125,7 +126,7 @@ class HandTracker:
     def _cand_pre_probs(self, cls: int, legal, node: int) -> np.ndarray:
         P = self.model.action_probs(cls, self.cpre, legal)
         if node >= 0 and self.mixing(PRE):
-            P = self._mix(P, self.bp.rows(node, self.bp.pre[self.ccls], legal), PRE)
+            P = self._mix(P, self._avg([bp.rows(node, bp.pre[self.ccls], legal) for bp in self.bps]), PRE)
         return P
 
     def _mix(self, Pc: np.ndarray, Pb: np.ndarray, street: int) -> np.ndarray:
@@ -141,22 +142,34 @@ class HandTracker:
         if street == PRE:
             w = np.exp(self.blogw - self.blogw.max())
             pc = self.model.action_probs(cls, pf.BIN_CENTERS, legal)[:, j]
-            pb = self.bp.pre_bin_rows(node, legal)[:, j]
+            pb = self._bp_pre_bin_rows(node, legal)[:, j]
         else:
             d = self.street_data(street)
             lw = self.logw[d.idx]
             w = np.exp(lw - lw.max())
             pc = self.model.action_probs(cls, d.u, legal)[:, j]
-            pb = self._bp_rows(street, node, self.candidate_buckets(street), legal)[:, j]
+            pb = self._bp_cand_rows(street, node, legal)[:, j]
         sw = w.sum()
         lc = float(np.dot(w, pc)) / sw
         lb = float(np.dot(w, np.maximum(pb, 1e-3))) / sw
         return max(lb, 1e-6), max(lc, 1e-6)
 
-    def _bp_rows(self, street: int, node: int, buckets: np.ndarray, legal) -> np.ndarray:
-        if street == RIVER and self.bp_smooth:
-            return self.bp.rows_smooth(node, buckets, legal)
-        return self.bp.rows(node, buckets, legal)
+    @staticmethod
+    def _avg(rows: list) -> np.ndarray:
+        return rows[0] if len(rows) == 1 else sum(rows) / len(rows)
+
+    def _bp_pre_bin_rows(self, node: int, legal) -> np.ndarray:
+        return self._avg([bp.pre_bin_rows(node, legal) for bp in self.bps])
+
+    def _bp_cand_rows(self, street: int, node: int, legal) -> np.ndarray:
+        """Blueprint probabilities of the legal actions at `node` for every alive candidate,
+        averaged over the blueprints in the model."""
+        rows = []
+        for i, bp in enumerate(self.bps):
+            B = self.candidate_buckets(street, i)
+            rows.append(bp.rows_smooth(node, B, legal) if street == RIVER and self.bp_smooth
+                        else bp.rows(node, B, legal))
+        return self._avg(rows)
 
     def change_evidence(self, street: int, cls: int, legal, j: int) -> float:
         """log P(action | short-memory model) - log P(action | model), over our current range."""
@@ -262,13 +275,15 @@ class HandTracker:
             d.groups = grp[dist.argmin(axis=1)]
         return d.groups
 
-    def candidate_buckets(self, street: int) -> np.ndarray:
-        """Blueprint bucket of every alive candidate on a postflop street (same features as
-        our own bucket: strength histogram over runouts on the flop/turn, strength on the river)."""
+    def candidate_buckets(self, street: int, i: int = 0) -> np.ndarray:
+        """Bucket in blueprint bps[i] of every alive candidate on a postflop street (same features
+        as our own bucket: strength histogram over runouts on the flop/turn, strength on the river)."""
         d = self.street_data(street)
-        b = getattr(d, "buckets", None)
+        if d.buckets is None:
+            d.buckets = {}
+        b = d.buckets.get(i)
         if b is None:
-            bp = self.bp
+            bp = self.bps[i]
             if street == RIVER:
                 b = np.minimum((d.evr * bp.B[3]).astype(np.int64), bp.B[3] - 1)
             else:
@@ -276,7 +291,7 @@ class HandTracker:
                 hist = self._strength_hist(d)
                 dist = (C ** 2).sum(1)[None, :] - 2 * hist @ C.T          # + |hist|^2, same for every bucket
                 b = dist.argmin(axis=1).astype(np.int64)
-            d.buckets = b
+            d.buckets[i] = b
         return b
 
     def strength_of(self, hand, street: int) -> float:
@@ -312,8 +327,6 @@ class HandTracker:
             cache, u = d.probs, d.u
 
         if self.mixing(street):
-            bp, B = self.bp, (None if street == PRE else self.candidate_buckets(street))
-
             def g(cls, legal, node=-1):
                 key = (cls, legal, node)
                 P = cache.get(key)
@@ -323,8 +336,8 @@ class HandTracker:
                         P = model.action_probs(cls, u, legal)
                         cache[(cls, legal)] = P
                     if node >= 0:
-                        P = self._mix(P, bp.pre_bin_rows(node, legal) if B is None
-                                      else self._bp_rows(street, node, B, legal), street)
+                        P = self._mix(P, self._bp_pre_bin_rows(node, legal) if street == PRE
+                                      else self._bp_cand_rows(street, node, legal), street)
                     cache[key] = P
                 return P
             return g

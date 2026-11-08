@@ -43,6 +43,7 @@ DEFAULT_PARAMS = {
     "bp_prior_k": 4.0,      # prior on the weight ~ exp(-k w) (0 = flat, start at bp_model0)
     "bp_lo": 0.02,          # clip of the automatic weight
     "bp_hi": 0.98,
+    "bp_extra": None,       # file of a second blueprint (in sdbot/data/ or absolute) averaged with the first
     # ---- experiments, off by default (results in dev/RESULTS.md) ---------------------------
     "share_bins": 0.0,      # >0: also share the strength profile of each action across streets
     "rich": None,           # e.g. {"n_cand": 900, "flop_m": 40}: bigger search in big pots when time allows
