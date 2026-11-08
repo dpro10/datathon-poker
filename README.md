@@ -21,11 +21,13 @@ action, never an error.
 | `sdbot/search.py` | Expectimax over the rest of the betting round, using the model for the opponent's replies; leaves estimate the rest of the hand with curves fitted on simulated play, blended between "equal opponent" and "weaker opponent" by how much we're winning. |
 | `sdbot/brain.py` | Ties it together; a time governor (startup CPU benchmark + measured judge round trips) keeps the time the judge charges near or below 55% of the 8 s bank, with a cheap board-aware fallback strategy. |
 
-Results in local testing (1000-deal duplicate matches, judge's 95% rule): it wins every
-match against a 22-bot practice pool (baselines, equity-threshold bots, TAG/LAG/nit, a
-balanced bluffer, adaptive exploiters) and beats all its earlier versions. Through the real
-judge over HTTP the worst case (a calling station, ~4 decisions per hand) is charged about
-2.5-3.6 s of the 8 s bank; the official smoke test passes in the tournament-like container.
+Results in local testing (1000-deal duplicate matches, judge's 95% rule): it won all 66
+matches against a 22-bot practice pool (baselines, equity-threshold bots, TAG/LAG/nit, a
+balanced bluffer, adaptive exploiters), and beats or ties every earlier version of itself in
+self-play. Through the real judge over HTTP, with the bot in its tournament-like container
+(read-only, non-root, 1 CPU, fresh container per half), the worst case (a calling station,
+~4 decisions per hand) was charged 3.2-3.5 s of the 8 s bank with 0 errors, and the
+official smoke test passes.
 
 **Before submitting:** set `PARTICIPANT` in `agent.py` to your team name.
 
@@ -37,6 +39,7 @@ python dev/pool_eval.py agent.py --seeds 1-2             # every practice bot, i
 python dev/stress.py                                     # extreme opponents: errors / desyncs / timing
 python dev/test_rules.py                                 # changed blinds / stacks / raise cap
 dev/http_match.sh dev/opponents/tag.py 7                 # one match through the real judge over HTTP
+dev/docker_match.sh dev/opponents/tag.py 7               # same, with the bot in its container
 ```
 
 `dev/` (excluded from the Docker image) also holds the tools used to build the bot:
