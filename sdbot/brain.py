@@ -91,10 +91,39 @@ def new_half(config, memory: dict) -> None:
     memory["pending_t"] = 0.0               # on_hand_end time riding on the next request
     memory["lvl_charge"] = [[0.0, 0] for _ in range(FALLBACK_LEVEL + 1)]
     memory["speed"] = SPEED
+    memory["gaps"] = []                     # measured judge round trips (see _note_gap)
+    memory["last_end"] = None
+
+
+def overhead(memory: dict) -> float:
+    """Per-request overhead the judge charges beyond our own compute: the larger of the
+    speed-scaled reference and the median measured round trip."""
+    est = OVERHEAD_REF * memory.get("speed", 1.0)
+    g = memory.get("gaps")
+    if g and len(g) >= 8:
+        est = max(est, float(np.median(g)))
+    return est
+
+
+def _note_gap(obs, memory: dict, t_start: float) -> None:
+    """When two of our requests come back to back in one hand with no opponent action in
+    between (our call closed a street and we act first on the next), the time between
+    our last reply and this call is the judge's round trip: network, JSON, plumbing."""
+    last = memory.get("last_end")
+    if last is None:
+        return
+    t_end, hand, n_hist = last
+    if hand == obs.hand_index and len(obs.action_history) == n_hist:
+        gap = t_start - t_end - memory.get("pending_t", 0.0)
+        if 0.0 < gap < 0.05:
+            g = memory["gaps"]
+            g.append(gap)
+            if len(g) > 64:
+                del g[0]
 
 
 def _charge(memory: dict, t_internal: float, level: int) -> None:
-    c = max(0.0, t_internal + OVERHEAD_REF * memory.get("speed", 1.0) - GRACE)
+    c = max(0.0, t_internal + overhead(memory) - GRACE)
     memory["charged"] += c
     memory["requests"] += 1
     s = memory["lvl_charge"][level]
@@ -114,9 +143,10 @@ def _level(memory: dict, hand_index: int) -> int:
     rate = memory["requests"] / done if memory.get("hands_done", 0) >= 20 else 3.0
     left = hands_left * rate
     speed = memory.get("speed", 1.0)
+    ovh = overhead(memory)
     for lvl in range(FALLBACK_LEVEL + 1):
         tot, n = memory["lvl_charge"][lvl]
-        guess = max(0.0, COST_REF[lvl] * speed + OVERHEAD_REF * speed - GRACE)
+        guess = max(0.0, COST_REF[lvl] * speed + ovh - GRACE)
         per = (tot + 20 * guess) / (n + 20)          # measured, shrunk toward the guess
         if charged + left * per <= budget:
             return lvl
@@ -126,6 +156,11 @@ def _level(memory: dict, hand_index: int) -> int:
 def choose_action(obs, memory: dict):
     legal = [int(a) for a in obs.legal_actions]
     t0 = time.perf_counter()
+    try:
+        _note_gap(obs, memory, t0)
+    except Exception:  # noqa: BLE001
+        if DEBUG:
+            raise
     try:
         a = _choose(obs, memory)
     except Exception:  # noqa: BLE001 - never let a bug cost an error
@@ -139,6 +174,7 @@ def choose_action(obs, memory: dict):
         try:
             _charge(memory, dt + memory.get("pending_t", 0.0), memory.get("level", 0))
             memory["pending_t"] = 0.0
+            memory["last_end"] = (time.perf_counter(), obs.hand_index, len(obs.action_history) + 1)
         except Exception:  # noqa: BLE001
             if DEBUG:
                 raise

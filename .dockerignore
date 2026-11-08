@@ -18,3 +18,4 @@ tools/
 docker/
 *.md
 *.json
+.pytest_cache
