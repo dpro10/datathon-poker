@@ -106,3 +106,9 @@ Experiments started before 05:35 used the v7 defaults unless their parameters sa
   machine load ~8 on 4 cores): charged 3.82 s / 4.50 s of the 8 s bank, 0 errors, +14.1.
 * `bp_river_smooth` (seeds 25-40, all-in EV): -0.04 vs bp1, +0.09 vs v7 - same as without
   (A: -0.09 / +0.10, D: -0.06 / +0.14); off.
+* Bigger search everywhere (`l0`: 900 candidates, 40 flop runouts, ~2.5x the time; v8
+  defaults, seeds 25-40, bank 40): +0.06 vs bp1, +0.18 vs v7 (v8: -0.06 / +0.14). More
+  compute helps a little but does not fit the 8 s bank everywhere -> `rich` option: the
+  bigger search only in pots of 16+ chips at the flop, while the governor shows slack.
+* `share` 10 (cross-street tendency sharing) on top of v8, pool seeds 5-6: +0.09 bb/deal
+  (se 0.07 over 22 bots; +0.03 without lag's +1.23). Follow-up queued.
