@@ -112,3 +112,6 @@ Experiments started before 05:35 used the v7 defaults unless their parameters sa
   bigger search only in pots of 16+ chips at the flop, while the governor shows slack.
 * `share` 10 (cross-street tendency sharing) on top of v8, pool seeds 5-6: +0.09 bb/deal
   (se 0.07 over 22 bots; +0.03 without lag's +1.23). Follow-up queued.
+* v8 + KL blend toward the blueprint (`blend_hi` 1, `blend_wr0` 0.5, `blend_n0` 100,
+  `blend_full` 0.4), seeds 25-40: +0.21 vs v7 but -0.17 vs bp1 (2 losses in 16), and +3.88
+  on the 8-bot subset (v8 +4.34) - rejected.
