@@ -118,3 +118,15 @@ Experiments started before 05:35 used the v7 defaults unless their parameters sa
 * `rich` ({"n_cand": 900, "flop_m": 40}, pots of 16+ chips, slack 0.8) vs the v8 snapshot,
   seeds 41-56, bank 16 to offset machine load: +0.06 (se 0.06); -0.03 vs bp1, -0.02 vs v7.
   At most a small gain; off by default.
+
+## v9: cross-street sharing on (06:15 UTC, Nov 8)
+
+`share` 10 on top of v8, all-in EV scoring:
+
+| Test | v8 | v9 (v8 + share) |
+| --- | --- | --- |
+| vs bp1, seeds 25-40 | -0.06 | +0.01 |
+| vs v7, seeds 25-40 | +0.14 (W2 C14) | +0.32 (W6 C10) |
+| pool, seeds 5-8 (22 bots x 4) | | +0.12 per bot (se 0.05) |
+
+Became the default; snapshot `v9`. Official tests, changed-rules test and blueprint test pass.

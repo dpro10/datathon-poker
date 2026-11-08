@@ -33,6 +33,7 @@ DEFAULT_PARAMS = {
     "act_strength": 8.0,    # decoupled model: pseudo-counts for P(action | class)
     "bin_strength": 2.0,    # decoupled model: pseudo-counts for P(strength bin | action, class)
     "memory_hands": 0,      # effective memory of the opponent model in hands (0 = never forget)
+    "share": 10.0,          # learn tendencies across streets (pseudo-counts of the shared ratios; 0 = off)
     # ---- blueprint opponent model (v8) ---------------------------------------------------
     "bp_model": 0.0,        # weight of the CFR blueprint in the opponent model (per candidate hand and node)
     "bp_auto": True,        # ... or fit that weight to the opponent (posterior mean over a grid)
@@ -43,7 +44,6 @@ DEFAULT_PARAMS = {
     "bp_lo": 0.02,          # clip of the automatic weight
     "bp_hi": 0.98,
     # ---- experiments, off by default (results in dev/RESULTS.md) ---------------------------
-    "share": 0.0,           # >0: learn tendencies across streets (pseudo-counts of the shared ratios)
     "rich": None,           # e.g. {"n_cand": 900, "flop_m": 40}: bigger search in big pots when time allows
     "rich_pot": 16,         # ... pot (chips) at the flop from which it applies
     "rich_slack": 0.8,      # ... only while the rest of the half at level 0 projects under this share of the budget

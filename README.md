@@ -17,7 +17,7 @@ action, never an error.
 | `sdbot/evaluator.py` | Vectorized evaluator: a 45 x 165 rank table (hole pair x board triple) reduced to a 225-entry table per board. Identical to `omaha_score` on every tested hand (146k checks), ~2000x faster in batches. |
 | `sdbot/preflop.py` + `data/preflop.npz` | All 19,998 suit-classes of 5-card hands: equity vs a random hand, percentile, and equity vs each 5% slice of opponent hands (Monte Carlo, ~175k samples per class). |
 | `sdbot/hand.py` | The opponent's range as ~500 weighted candidate hands; each opponent action reweights them by how likely that action is for each hand. Per street: our equity vs every candidate, each candidate's strength percentile and its blueprint bucket. |
-| `sdbot/model.py` | Opponent model learned during the half: 31 situations (street, position, bet faced) x 5 strength bins x 4 actions. Action frequencies come from every hand, the strength behind each action from showdowns (so bluffs we folded to aren't explained away). Prior calibrated on a pool of practice bots. |
+| `sdbot/model.py` | Opponent model learned during the half: 31 situations (street, position, bet faced) x 5 strength bins x 4 actions. Action frequencies come from every hand, the strength behind each action from showdowns (so bluffs we folded to aren't explained away). Prior calibrated on a pool of practice bots; in each postflop situation the prior is tilted by how the opponent deviates from it in the same situation on the other streets, so rare spots learn from common ones. |
 | `sdbot/blueprint.py` + `data/blueprint.npz` | An approximate equilibrium of the game from our own CFR solver (`dev/cfr/`: external-sampling MCCFR in C over the exact betting tree, 1.3B iterations, 128/128/128/64 card buckets). It is a second opponent model - what a solver would do with each candidate hand at the exact betting node - mixed with the learned one as `w * blueprint + (1 - w) * learned`. The weight is fitted to each opponent online (posterior over a grid from how well each `w` predicted every action, old evidence fading, prior leaning to 0): about 0.9 against a solver, 0.4 against an adaptive search bot, 0 against simple bots. |
 | `sdbot/search.py` | Expectimax over the rest of the betting round, using the model for the opponent's replies; leaves estimate the rest of the hand with curves fitted on simulated play, blended between "equal opponent" and "weaker opponent" by how much we're winning. |
 | `sdbot/brain.py` | Ties it together; a time governor (startup CPU benchmark + measured judge round trips) keeps the time the judge charges near or below 55% of the 8 s bank, with a cheap board-aware fallback strategy. |
@@ -29,8 +29,10 @@ balanced bluffer, adaptive exploiters). The blueprint opponent model (v8) fixed 
 40 seeds (+0.03) and slightly ahead of v7 (+0.07); the shipped settings (evidence fading,
 prior leaning to 0) did as well or better on the 16 seeds where both were run, and cost
 about 0.1 bb/deal of margin against the weakest practice bots. An opponent given a prior
-fitted to the bot's own behaviour gains +0.13 against it (+0.68 against v7). Details,
-methods and everything that was tried: `dev/RESULTS.md`.
+fitted to the bot's own behaviour gains +0.13 against it (+0.68 against v7). Sharing
+tendencies across streets (v9) then added +0.12 bb/deal against the pool (4 seeds, se 0.05)
+and, on the same 16 seeds, +0.32 vs v7 (v8: +0.14) and +0.01 vs the blueprint (v8: -0.06).
+Details, methods and everything that was tried: `dev/RESULTS.md`.
 
 Through the real judge over HTTP, with the bot in its tournament-like container (read-only,
 non-root, 1 CPU, fresh container per half), v7's worst case (a calling station, ~4 decisions
