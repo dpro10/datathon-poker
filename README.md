@@ -18,7 +18,7 @@ action, never an error.
 | `sdbot/preflop.py` + `data/preflop.npz` | All 19,998 suit-classes of 5-card hands: equity vs a random hand, percentile, and equity vs each 5% slice of opponent hands (Monte Carlo, ~175k samples per class). |
 | `sdbot/hand.py` | The opponent's range as ~500 weighted candidate hands; each opponent action reweights them by how likely that action is for each hand. Per street: our equity vs every candidate, each candidate's strength percentile and its blueprint bucket. |
 | `sdbot/model.py` | Opponent model learned during the half: 31 situations (street, position, bet faced) x 5 strength bins x 4 actions. Action frequencies come from every hand, the strength behind each action from showdowns (so bluffs we folded to aren't explained away). Prior calibrated on a pool of practice bots; in each postflop situation the prior is tilted by how the opponent deviates from it in the same situation on the other streets, so rare spots learn from common ones. |
-| `sdbot/blueprint.py` + `data/blueprint.npz` | An approximate equilibrium of the game from our own CFR solver (`dev/cfr/`: external-sampling MCCFR in C over the exact betting tree, 1.3B iterations, 128/128/128/64 card buckets). It is a second opponent model - what a solver would do with each candidate hand at the exact betting node - mixed with the learned one as `w * blueprint + (1 - w) * learned`. The weight is fitted to each opponent online (posterior over a grid from how well each `w` predicted every action, old evidence fading, prior leaning to 0): about 0.9 against a solver, 0.4 against an adaptive search bot, 0 against simple bots. |
+| `sdbot/blueprint.py` + `data/blueprint*.npz` | Two approximate equilibria of the game from our own CFR solver (`dev/cfr/`: external-sampling MCCFR in C over the exact betting tree; 1.3B iterations at 128/128/128/64 card buckets and 2.3B at 256/256/256/96). Their averaged prediction - what a solver would do with each candidate hand at the exact betting node - is a second opponent model, mixed with the learned one as `w * blueprint + (1 - w) * learned`. The weight is fitted to each opponent online (posterior over a grid from how well each `w` predicted every action, old evidence fading, prior leaning to 0): about 0.9 against a solver, 0.4 against an adaptive search bot, 0 against simple bots. |
 | `sdbot/search.py` | Expectimax over the rest of the betting round, using the model for the opponent's replies; leaves estimate the rest of the hand with curves fitted on simulated play, blended between "equal opponent" and "weaker opponent" by how much we're winning. |
 | `sdbot/brain.py` | Ties it together; a time governor (startup CPU benchmark + measured judge round trips) keeps the time the judge charges near or below 55% of the 8 s bank, with a cheap board-aware fallback strategy. |
 
@@ -32,15 +32,15 @@ about 0.1 bb/deal of margin against the weakest practice bots. An opponent given
 fitted to the bot's own behaviour gains +0.13 against it (+0.68 against v7). Sharing
 tendencies across streets (v9) then added +0.12 bb/deal against the pool (4 seeds, se 0.05)
 and, on the same 16 seeds, +0.32 vs v7 (v8: +0.14) and +0.01 vs the blueprint (v8: -0.06).
-Details, methods and everything that was tried: `dev/RESULTS.md`.
+Averaging two blueprints trained with different card abstractions (v10) then made the bot
+even with both CFR bots (32 seeds each: +0.02 and -0.02; v9 -0.04 and -0.06) while still
+beating v7 (+0.11). Details, methods and everything that was tried: `dev/RESULTS.md`.
 
 Through the real judge over HTTP, with the bot in its tournament-like container (read-only,
-non-root, 1 CPU, fresh container per half), v7's worst case (a calling station, ~4 decisions
-per hand) was charged 3.2-3.5 s of the 8 s bank with 0 errors, and the official smoke test
-passes. v9 (the blueprint model adds ~0.1-0.3 ms per decision) passes the official smoke test
-in the restricted container, and a full container match against the calling station, run
-while a 4-thread solver job was using every core, was charged 4.3 s and 5.5 s of the 8 s
-bank with 0 errors (v8 over plain HTTP on a loaded machine: 3.8 s / 4.5 s).
+non-root, no network, 1 CPU, fresh container per half), v10 passes the official smoke test and
+a full match against the calling station (the most decisions per hand) was charged 2.7 s and
+4.2 s of the 8 s bank with 0 errors. The bot pins NumPy's BLAS to one thread
+(`sdbot/__init__.py`): extra BLAS threads only spin, tripling CPU use under a 1-CPU quota.
 
 **Before submitting:** set `PARTICIPANT` in `agent.py` to your team name.
 

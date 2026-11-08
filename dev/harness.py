@@ -11,6 +11,11 @@ match is scored with the judge's own combine_halves (95% CI on paired bb/deal).
 """
 from __future__ import annotations
 
+import os as _os
+
+for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):   # like the bot (sdbot/__init__.py)
+    _os.environ.setdefault(_v, "1")
+
 import argparse
 import importlib.util
 import itertools

@@ -32,7 +32,11 @@ first 100M iterations are discounted linearly, as in Pluribus.
 | Blueprint | Buckets (pre/flop/turn/river) | Info sets | Iterations | Pool | Where |
 | --- | --- | --- | --- | --- | --- |
 | bp_a | 128 / 128 / 128 / 64 | 1.31M | 1.29B (1 h) | 4M deals | `sdbot/data/blueprint.npz` |
-| bp_b | 256 / 256 / 256 / 96 | 2.26M | 2.29B (2.5 h, shared CPU) | 6M deals | `dev/cfr/blueprints/blueprint_b.npz` |
+| bp_b | 256 / 256 / 256 / 96 | 2.26M | 2.29B (2.5 h, shared CPU) | 6M deals | `sdbot/data/blueprint_b.npz` |
+
+Since v10 the bot's opponent model averages the two blueprints' predictions (`bp_extra`): two
+abstractions approximate the same equilibrium with different errors, so the average predicts
+an unknown solver better than either alone.
 
 Only the packed strategies are kept in git; the regret / strategy-sum files needed to resume
 training (`build/bp_*.regret.f32`, `.sum.f64`) are large and stay local.

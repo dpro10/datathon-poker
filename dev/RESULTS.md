@@ -182,3 +182,28 @@ weaker against v7 here, and costs ~25% more compute; more seeds are running.
 * `share_bins` 5 on v9: seeds 25-40 -0.04 vs bp1 / +0.24 vs v7 (v9: +0.01 / +0.32); pool
   seeds 7-8 +5.53 (v9 +5.51) - no gain; off.
 * `share` 5 instead of 10: seeds 25-40 +0.01 vs bp1 / +0.29 vs v7 - same as 10; kept 10.
+
+## v10: two blueprints averaged in the opponent model (07:40 UTC, Nov 8)
+
+Seeds 57-88 (32 each, all-in EV):
+
+| Model | vs bp1 | vs bp2 | vs v7 |
+| --- | --- | --- | --- |
+| v9 (bp_a) | -0.04 | -0.06 | +0.20 |
+| v10 (bp_a + bp_b averaged) | +0.02 | -0.02 | +0.11 |
+
+Pool seeds 7-8: v10 +5.53 vs v9 +5.51 (+0.02, se 0.04). v10 is even with both solvers; the
+v7 margin dropped somewhat (within ~1 se). Adopted for robustness against unknown solvers.
+
+**BLAS threads.** NumPy's OpenBLAS ran the candidate-bucketing matrix product on several
+threads that only spin: same wall time, 3x the CPU (0.217 ms wall / 0.682 ms CPU per
+product). With one CPU per bot that slows the main thread, and in parallel test runs it
+oversubscribed the machine (the 2-blueprint model looked 2.4x slower than v9; it is +26%).
+`sdbot/__init__.py` now sets OPENBLAS/OMP/MKL_NUM_THREADS=1 before numpy loads (so does
+`dev/harness.py`): v9's CPU per decision fell from 1.09 to 0.95 ms. Experiments before this
+change that ran 4 matches in parallel had inflated `maxT` timings (results unaffected:
+HARNESS_BANK=40 kept the governors from reacting).
+
+v10 checks: mirrors its snapshot exactly; official tests 12/12; changed-rules, blueprint and
+stress tests clean; container smoke test passed; container match vs the calling station
+charged 2.65 s / 4.17 s of 8 s, 0 errors (quiet machine).
