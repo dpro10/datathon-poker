@@ -203,6 +203,7 @@ def _choose(obs, memory: dict) -> int:
         memory["hand"] = h
     h.sync(obs)
     if h.desync:
+        memory["desyncs"] = memory.get("desyncs", 0) + 1
         return fallback(obs)
     st = h.st
     e, u, w = h.range_now(st.street)
